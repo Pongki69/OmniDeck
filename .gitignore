@@ -1,0 +1,11 @@
+.tools/
+dist/
+bin/
+obj/
+build/
+.gradle/
+local.properties
+*.apk
+*.user
+.vs/
+.idea/
