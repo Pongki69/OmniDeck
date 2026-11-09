@@ -13,8 +13,16 @@ internal sealed class RecordingPad : IPadSink
 {
     public List<ControllerStatePacket> Packets { get; } = new();
     public int Neutralized { get; private set; }
+    public List<(string Text, byte Key)> Typed { get; } = new();
+    public bool KeyboardAllowed { get; set; } = true;
     public void ProcessInputPacket(ControllerStatePacket packet) => Packets.Add(packet);
     public void Neutralize() => Neutralized++;
+
+    public bool TypeText(string text, byte key)
+    {
+        if (KeyboardAllowed) Typed.Add((text, key));
+        return KeyboardAllowed;
+    }
 }
 
 public class ProtocolTests
@@ -64,6 +72,303 @@ public class ProtocolTests
         Assert.Equal(-512, p.MouseDeltaY);
         Assert.Equal(3, p.MouseButtons);
     }
+
+    // Same bytes are asserted by ProtocolTest.kt on the client.
+    [Fact]
+    public void Golden_keyboard_decodes()
+    {
+        var d = Hex("4F440501785634120700000003004100E900");
+        Assert.True(Protocol.IsValidKeyboard(d));
+        Assert.Equal(0x12345678u, Protocol.ReadToken(d));
+        Assert.Equal(7u, Protocol.ReadSeq(d));
+        Assert.Equal(Protocol.KeyEnter, Protocol.ReadKeyboardKey(d));
+        Assert.Equal("Aé", Protocol.ReadKeyboardText(d));
+    }
+
+    [Fact]
+    public void Golden_keyboard_ack_matches_client() =>
+        Assert.Equal(Hex("4F4406010700000001"), Protocol.BuildKeyboardAck(7, true));
+
+    [Theory]
+    [InlineData(13, false)]
+    [InlineData(14, true)]
+    [InlineData(15, false)]
+    [InlineData(14 + 512, true)]
+    [InlineData(14 + 514, false)]
+    public void Keyboard_length_is_checked(int length, bool valid) =>
+        Assert.Equal(valid, Protocol.IsValidKeyboard(new byte[length]));
+}
+
+public class AppUpdaterTests
+{
+    // A throwaway key. The signature was made with the same openssl command the release workflow uses.
+    private static readonly byte[] TestPublicKey = Convert.FromBase64String("MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkCTprukpbRFqvYHUquhLagodLwqV11dsgB0/ibfQzN+ILnS34BUqzhHnMekqOzJMxXGOaq58CVfuazn60AlWZg==");
+    private static readonly byte[] TestSignature = Convert.FromBase64String("MEQCIDz3Npey8KMNk/VAj4OzSwObI9O/Tj2pcPlfdp/FQ01LAiARnEWDY0WnlES5L+l9bERJZdxlESIS365ptWw1OJdjtA==");
+    private const string Prefix = "https://github.com/Pongki69/OmniDeck/releases/download/v1.2.3/";
+
+    private static string Release(string tag = "v1.2.3", bool prerelease = false, string prefix = Prefix) => $$"""
+        {"tag_name":"{{tag}}","draft":false,"prerelease":{{(prerelease ? "true" : "false")}},"assets":[
+          {"name":"OmniDeck-windows.zip","browser_download_url":"{{prefix}}OmniDeck-windows.zip"},
+          {"name":"OmniDeck-windows.zip.sig","browser_download_url":"{{prefix}}OmniDeck-windows.zip.sig"}]}
+        """;
+
+    private static MemoryStream Text(string s) => new(System.Text.Encoding.ASCII.GetBytes(s));
+
+    [Fact]
+    public void Openssl_signature_is_accepted() =>
+        Assert.True(AppUpdater.VerifySignature(Text("omnideck update"), TestSignature, TestPublicKey));
+
+    [Fact]
+    public void Changed_content_is_rejected() =>
+        Assert.False(AppUpdater.VerifySignature(Text("omnideck updatE"), TestSignature, TestPublicKey));
+
+    [Fact]
+    public void Garbage_signature_is_rejected() =>
+        Assert.False(AppUpdater.VerifySignature(Text("omnideck update"), new byte[] { 1, 2, 3 }, TestPublicKey));
+
+    [Fact]
+    public void Newer_release_is_offered()
+    {
+        var r = AppUpdater.ParseRelease(Release(), new Version(1, 2, 2))!;
+        Assert.Equal(new Version(1, 2, 3), r.Version);
+        Assert.Equal(Prefix + "OmniDeck-windows.zip", r.ZipUrl);
+        Assert.Equal(Prefix + "OmniDeck-windows.zip.sig", r.SignatureUrl);
+    }
+
+    [Theory]
+    [InlineData(1, 2, 3)]
+    [InlineData(1, 3, 0)]
+    [InlineData(2, 0, 0)]
+    public void Same_or_older_release_is_not_offered(int major, int minor, int patch) =>
+        Assert.Null(AppUpdater.ParseRelease(Release(), new Version(major, minor, patch, 0)));
+
+    [Fact]
+    public void Prereleases_are_not_offered() =>
+        Assert.Null(AppUpdater.ParseRelease(Release(prerelease: true), new Version(1, 0, 0)));
+
+    [Fact]
+    public void Downloads_from_anywhere_else_are_not_offered() =>
+        Assert.Null(AppUpdater.ParseRelease(Release(prefix: "https://example.com/"), new Version(1, 0, 0)));
+
+    [Theory]
+    [InlineData("1.2.3")]
+    [InlineData("v1.2")]
+    [InlineData("v1.2.3.4")]
+    [InlineData("latest")]
+    public void Malformed_tags_are_not_offered(string tag) =>
+        Assert.Null(AppUpdater.ParseRelease(Release(tag), new Version(0, 0, 1)));
+
+    [Fact]
+    public void Copy_replaces_files_and_keeps_subfolders()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"omnideck-test-{Guid.NewGuid():N}");
+        string source = Path.Combine(root, "new"), target = Path.Combine(root, "old");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(source, "sub"));
+            Directory.CreateDirectory(target);
+            File.WriteAllText(Path.Combine(source, "OmniDeck.exe"), "new");
+            File.WriteAllText(Path.Combine(source, "sub", "lib.dll"), "lib");
+            File.WriteAllText(Path.Combine(target, "OmniDeck.exe"), "old");
+
+            AppUpdater.CopyApplication(source, target);
+
+            Assert.Equal("new", File.ReadAllText(Path.Combine(target, "OmniDeck.exe")));
+            Assert.Equal("lib", File.ReadAllText(Path.Combine(target, "sub", "lib.dll")));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+}
+
+public class SecureTransportTests
+{
+    // Generated independently with Node's crypto module. The same values are asserted by ProtocolTest.kt.
+    private const string ClientPublic = "040217E617F0B6443928278F96999E69A23A4F2C152BDF6D6CDF66E5B80282D4ED194A7DEBCB97712D2DDA3CA85AA8765A56F45FC758599652F2897C65306E5794";
+    private const string HostPublic = "04D65A93977CAA3D1B081852FF57A79E465F1660577304BAEAD505DD3A48589CF350185E895372DF6221EA3A137557E473FDDB6755F05BD507C3C533FCE9C91285";
+    private const string GoldenSecureHello = "4F440901" + ClientPublic + "93C932B6D50F8C6C0EC2981ECBA93CAEFAED192B466707D1CC174731D1EC65846BDBC60C";
+    private const string GoldenSealedBye = "4F44200101000000000000007C501143F62F97E45E6D40442FA0340A68A2DFDE8D21510A";
+    private const uint Pin = 123456;
+
+    private static readonly IPEndPoint Phone = new(IPAddress.Parse("192.168.1.50"), 40000);
+    private static readonly IPEndPoint Other = new(IPAddress.Parse("192.168.1.99"), 40000);
+    private static readonly StreamParameters Params = new(VideoCodec.H264, 1920, 1080, 60, 48000);
+
+    private static HostIdentity GoldenHost() => HostIdentity.FromPrivateKey(Convert.FromHexString(new string('2', 64)));
+
+    private static (SecureTransport Transport, SessionManager Sessions, RecordingPad Pad) Host()
+    {
+        var pad = new RecordingPad();
+        var sessions = new SessionManager(pad, Pin, Params);
+        return (new SecureTransport(GoldenHost(), sessions), sessions, pad);
+    }
+
+    private static SessionKeys ClientKeys() =>
+        new(ClientSecret(), Convert.FromHexString(ClientPublic), Convert.FromHexString(HostPublic));
+
+    private static byte[] ClientSecret()
+    {
+        var client = HostIdentity.FromPrivateKey(Convert.FromHexString(new string('1', 64)));
+        using var host = GoldenHost().Key.PublicKey;
+        return client.Key.DeriveRawSecretAgreement(host);
+    }
+
+    private static byte[] Welcome(SessionKeys client, byte[] sealedWelcome) => client.Control.Open(sealedWelcome)!;
+
+    [Fact]
+    public void Public_key_derivation_matches_the_other_implementations() =>
+        Assert.Equal(HostPublic, Convert.ToHexString(GoldenHost().PublicKey));
+
+    [Fact]
+    public void Key_request_returns_the_public_key_and_must_be_padded()
+    {
+        var (t, _, _) = Host();
+        var request = new byte[Protocol.KeyRequestSize];
+        Protocol.WriteHeader(request, Protocol.TypeKeyRequest);
+
+        var reply = t.HandleDatagram(request, Phone, 0)!;
+        Assert.Equal(Protocol.TypeKeyReply, reply[2]);
+        Assert.Equal(HostPublic, Convert.ToHexString(reply.AsSpan(4)));
+        Assert.Null(t.HandleDatagram(request.AsSpan(0, 4), Phone, 0));
+    }
+
+    [Fact]
+    public void Golden_handshake_starts_a_session_with_matching_keys()
+    {
+        var (t, s, _) = Host();
+        var reply = t.HandleDatagram(Convert.FromHexString(GoldenSecureHello), Phone, 0)!;
+
+        Assert.NotNull(s.Current);
+        Assert.Equal((byte)Protocol.WelcomeStatus.Ok, Welcome(ClientKeys(), reply)[4]);
+    }
+
+    [Fact]
+    public void Lost_welcome_can_be_retried_without_replacing_the_session()
+    {
+        var (t, s, _) = Host();
+        var hello = Convert.FromHexString(GoldenSecureHello);
+        var client = ClientKeys();
+
+        t.HandleDatagram(hello, Phone, 0);
+        var session = s.Current;
+        var again = Welcome(client, t.HandleDatagram(hello, Phone, 1)!);
+
+        Assert.Same(session, s.Current);
+        Assert.Equal((byte)Protocol.WelcomeStatus.Ok, again[4]);
+    }
+
+    [Fact]
+    public void Golden_sealed_message_decrypts_and_reaches_the_session()
+    {
+        var (t, s, _) = Host();
+        var hello = Convert.FromHexString(GoldenSecureHello);
+        t.HandleDatagram(hello, Phone, 0);
+        Assert.Equal("4F44040178563412", Convert.ToHexString(ClientKeys().ClientToHost.Open(Convert.FromHexString(GoldenSealedBye))!));
+
+        Assert.NotNull(s.Current);
+    }
+
+    private static byte[] SealedInput(SessionKeys client, uint token, uint seq)
+    {
+        var d = new byte[Protocol.InputSize];
+        Protocol.WriteHeader(d, Protocol.TypeInput);
+        BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(4), token);
+        BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(8), seq);
+        return client.ClientToHost.Seal(d);
+    }
+
+    private static (SecureTransport T, RecordingPad Pad, SessionKeys Client, uint Token) Connected()
+    {
+        var (t, _, pad) = Host();
+        var client = ClientKeys();
+        var welcome = Welcome(client, t.HandleDatagram(Convert.FromHexString(GoldenSecureHello), Phone, 0)!);
+        return (t, pad, client, BinaryPrimitives.ReadUInt32LittleEndian(welcome.AsSpan(8)));
+    }
+
+    [Fact]
+    public void Encrypted_input_reaches_the_controller()
+    {
+        var (t, pad, client, token) = Connected();
+        t.HandleDatagram(SealedInput(client, token, 1), Phone, 1);
+        Assert.Single(pad.Packets);
+    }
+
+    [Fact]
+    public void Tampered_input_is_dropped()
+    {
+        var (t, pad, client, token) = Connected();
+        var d = SealedInput(client, token, 1);
+        d[20] ^= 1;
+        Assert.Null(t.HandleDatagram(d, Phone, 1));
+        Assert.Empty(pad.Packets);
+    }
+
+    [Fact]
+    public void Encrypted_input_from_another_address_is_dropped()
+    {
+        var (t, pad, client, token) = Connected();
+        Assert.Null(t.HandleDatagram(SealedInput(client, token, 1), Other, 1));
+        Assert.Empty(pad.Packets);
+    }
+
+    [Fact]
+    public void Unencrypted_input_and_hello_are_ignored()
+    {
+        var (t, pad, _, token) = Connected();
+        var plain = new byte[Protocol.InputSize];
+        Protocol.WriteHeader(plain, Protocol.TypeInput);
+        BinaryPrimitives.WriteUInt32LittleEndian(plain.AsSpan(4), token);
+        BinaryPrimitives.WriteUInt32LittleEndian(plain.AsSpan(8), 1);
+
+        Assert.Null(t.HandleDatagram(plain, Phone, 1));
+        Assert.Empty(pad.Packets);
+
+        var (fresh, sessions, _) = Host();
+        var hello = Convert.FromHexString("4F44010140E2010028A029A038043C1E02000000");
+        Assert.Null(fresh.HandleDatagram(hello, Phone, 0));
+        Assert.Null(sessions.Current);
+    }
+
+    [Fact]
+    public void Handshake_replayed_from_another_address_is_dropped()
+    {
+        var (t, s, _) = Host();
+        var hello = Convert.FromHexString(GoldenSecureHello);
+        t.HandleDatagram(hello, Phone, 0);
+        var session = s.Current;
+
+        Assert.Null(t.HandleDatagram(hello, Other, 1));
+        Assert.Same(session, s.Current);
+    }
+
+    [Fact]
+    public void Wrong_pin_stays_rejected_through_encryption()
+    {
+        var pad = new RecordingPad();
+        var sessions = new SessionManager(pad, 999999, Params);
+        var t = new SecureTransport(GoldenHost(), sessions);
+
+        var reply = t.HandleDatagram(Convert.FromHexString(GoldenSecureHello), Phone, 0)!;
+        Assert.Equal((byte)Protocol.WelcomeStatus.BadPin, Welcome(ClientKeys(), reply)[4]);
+        Assert.Null(sessions.Current);
+    }
+
+    [Fact]
+    public void Identity_survives_being_saved_and_reloaded()
+    {
+        string path = Path.Combine(Path.GetTempPath(), $"omnideck-test-{Guid.NewGuid():N}.bin");
+        try
+        {
+            var first = HostIdentity.LoadOrCreate(path);
+            Assert.Equal(first.PublicKey, HostIdentity.LoadOrCreate(path).PublicKey);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }
 
 public class SessionTests
@@ -97,6 +402,56 @@ public class SessionTests
         var w = s.HandleDatagram(Hello(Pin), Phone, 0)!;
         Assert.Equal((byte)Protocol.WelcomeStatus.Ok, w[4]);
         return BinaryPrimitives.ReadUInt32LittleEndian(w.AsSpan(8));
+    }
+
+    private static byte[] Keyboard(uint token, uint id, string text, byte key = Protocol.KeyNone)
+    {
+        var d = new byte[Protocol.KeyboardHeaderSize + text.Length * 2];
+        Protocol.WriteHeader(d, Protocol.TypeKeyboard);
+        BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(4), token);
+        BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(8), id);
+        d[12] = key;
+        System.Text.Encoding.Unicode.GetBytes(text, d.AsSpan(Protocol.KeyboardHeaderSize));
+        return d;
+    }
+
+    [Fact]
+    public void Resent_keyboard_message_is_typed_once_and_acknowledged_each_time()
+    {
+        var pad = new RecordingPad();
+        var s = new SessionManager(pad, Pin, Params);
+        uint token = Connect(s);
+
+        var first = s.HandleDatagram(Keyboard(token, 1, "abc"), Phone, 1);
+        var again = s.HandleDatagram(Keyboard(token, 1, "abc"), Phone, 2);
+
+        Assert.Equal(Protocol.BuildKeyboardAck(1, true), first);
+        Assert.Equal(first, again);
+        Assert.Single(pad.Typed);
+        Assert.Equal(("abc", Protocol.KeyNone), pad.Typed[0]);
+    }
+
+    [Fact]
+    public void Keyboard_from_a_stranger_or_with_a_wrong_token_is_ignored()
+    {
+        var pad = new RecordingPad();
+        var s = new SessionManager(pad, Pin, Params);
+        uint token = Connect(s);
+
+        Assert.Null(s.HandleDatagram(Keyboard(token + 1, 1, "x"), Phone, 1));
+        Assert.Null(s.HandleDatagram(Keyboard(token, 1, "x"), new IPEndPoint(IPAddress.Parse("192.168.1.99"), 40000), 1));
+        Assert.Empty(pad.Typed);
+    }
+
+    [Fact]
+    public void Keyboard_is_refused_when_the_pc_has_it_turned_off()
+    {
+        var pad = new RecordingPad { KeyboardAllowed = false };
+        var s = new SessionManager(pad, Pin, Params);
+        uint token = Connect(s);
+
+        Assert.Equal(Protocol.BuildKeyboardAck(1, false), s.HandleDatagram(Keyboard(token, 1, "x"), Phone, 1));
+        Assert.Empty(pad.Typed);
     }
 
     [Fact]

@@ -6,6 +6,9 @@ build/
 .gradle/
 local.properties
 *.apk
+*.jks
+*.keystore
+*.pem
 *.user
 .vs/
 .idea/

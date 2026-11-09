@@ -6,12 +6,21 @@ import com.remotegamestreamer.client.input.ControllerState
 import com.remotegamestreamer.client.input.HudCatalog
 import com.remotegamestreamer.client.input.HudLayout
 import com.remotegamestreamer.client.input.InputNormalizer
+import com.remotegamestreamer.client.net.Crypto
 import com.remotegamestreamer.client.net.Protocol
+import com.remotegamestreamer.client.net.SessionKeys
+import com.remotegamestreamer.client.net.StreamCipher
+import com.remotegamestreamer.client.update.UpdateRules
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.math.BigInteger
+import java.security.GeneralSecurityException
+import java.security.KeyFactory
+import java.security.interfaces.ECPublicKey
+import java.security.spec.ECPrivateKeySpec
 
 private fun hex(s: String) = ByteArray(s.length / 2) { s.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
 private fun ByteArray.toHex() = joinToString("") { "%02X".format(it) }
@@ -46,6 +55,22 @@ class ProtocolTest {
     }
 
     @Test
+    fun keyboardMatchesHostLayout() {
+        assertEquals(
+            "4F440501785634120700000003004100E900",
+            Protocol.buildKeyboard(0x12345678, 7, "Aé", Protocol.KEY_ENTER).toHex(),
+        )
+    }
+
+    @Test
+    fun keyboardAckParses() {
+        val ack = Protocol.parseKeyboardAck(hex("4F4406010700000001"), 9)!!
+        assertEquals(7, ack.id)
+        assertTrue(ack.accepted)
+        assertEquals(null, Protocol.parseKeyboardAck(hex("4F4402010700000001"), 9))
+    }
+
+    @Test
     fun welcomeParses() {
         val w = Protocol.parseWelcome(hex("4F440201" + "00003C00" + "78563412" + "8007" + "3804" + "80BB0000"), 20)!!
         assertEquals(Protocol.STATUS_OK, w.status)
@@ -60,6 +85,112 @@ class ProtocolTest {
     fun welcomeReportsMouseEnabled() {
         val w = Protocol.parseWelcome(hex("4F440201" + "00003C01" + "78563412" + "8007" + "3804" + "80BB0000"), 20)!!
         assertTrue(w.mouseEnabled)
+    }
+}
+
+class UpdateRulesTest {
+    @Test
+    fun onlyHigherVersionsCount() {
+        assertTrue(UpdateRules.isNewer("v1.2.3", "1.2.2"))
+        assertTrue(UpdateRules.isNewer("v1.10.0", "1.9.9"))
+        assertTrue(UpdateRules.isNewer("v2.0.0", "1.99.99"))
+        assertFalse(UpdateRules.isNewer("v1.2.3", "1.2.3"))
+        assertFalse(UpdateRules.isNewer("v1.2.2", "1.2.3"))
+    }
+
+    @Test
+    fun malformedVersionsNeverCount() {
+        assertFalse(UpdateRules.isNewer("latest", "1.0.0"))
+        assertFalse(UpdateRules.isNewer("v2.0", "1.0.0"))
+        assertFalse(UpdateRules.isNewer("v2.0.0", ""))
+    }
+
+    @Test
+    fun onlyThisProjectsReleasesAreTrusted() {
+        assertTrue(UpdateRules.isTrustedDownload("https://github.com/Pongki69/OmniDeck/releases/download/v1.0.0/OmniDeck.apk"))
+        assertFalse(UpdateRules.isTrustedDownload("https://example.com/OmniDeck.apk"))
+        assertFalse(UpdateRules.isTrustedDownload("http://github.com/Pongki69/OmniDeck/releases/download/v1.0.0/OmniDeck.apk"))
+    }
+}
+
+class CryptoTest {
+    // Generated independently with Node's crypto module. The same values are asserted by HostTests.cs.
+    private val clientPublic = hex("040217E617F0B6443928278F96999E69A23A4F2C152BDF6D6CDF66E5B80282D4ED194A7DEBCB97712D2DDA3CA85AA8765A56F45FC758599652F2897C65306E5794")
+    private val hostPublic = hex("04D65A93977CAA3D1B081852FF57A79E465F1660577304BAEAD505DD3A48589CF350185E895372DF6221EA3A137557E473FDDB6755F05BD507C3C533FCE9C91285")
+    private val goldenBye = hex("4F44200101000000000000007C501143F62F97E45E6D40442FA0340A68A2DFDE8D21510A")
+    private val hello = hex("4F44010140E2010028A029A038043C1E02000000")
+
+    private val params = (Crypto.newKeyPair().public as ECPublicKey).params
+
+    private fun keys(): SessionKeys {
+        val privateKey = KeyFactory.getInstance("EC").generatePrivate(ECPrivateKeySpec(BigInteger("11".repeat(32), 16), params))
+        return SessionKeys(Crypto.sharedSecret(privateKey, Crypto.decodePublic(hostPublic, params)), clientPublic, hostPublic)
+    }
+
+    private fun label(l: String) = "OmniDeck $l".toByteArray()
+
+    @Test
+    fun secureHelloMatchesTheOtherImplementations() {
+        assertEquals(
+            "4F440901" + clientPublic.toHex() + "93C932B6D50F8C6C0EC2981ECBA93CAEFAED192B466707D1CC174731D1EC65846BDBC60C",
+            Protocol.buildSecureHello(clientPublic, keys().helloKey, hello).toHex(),
+        )
+    }
+
+    @Test
+    fun sealMatchesTheOtherImplementations() {
+        assertEquals(goldenBye.toHex(), keys().clientToHost.seal(hex("4F44040178563412")).toHex())
+    }
+
+    @Test
+    fun derivedKeysMatchTheOtherImplementations() {
+        val privateKey = KeyFactory.getInstance("EC").generatePrivate(ECPrivateKeySpec(BigInteger("11".repeat(32), 16), params))
+        val secret = Crypto.sharedSecret(privateKey, Crypto.decodePublic(hostPublic, params))
+        val salt = clientPublic + hostPublic
+        assertEquals("2E4FD57A1361FA02F748AA4B6F2F33EA0B16B410DBF08B2A7E54E8AC421DB569", Crypto.hkdf(secret, salt, label("video")).toHex())
+        assertEquals("64B1858B09A431397EDF739DBD213DCB115D485637087A164C88240B5948A4C4", Crypto.hkdf(secret, salt, label("audio")).toHex())
+    }
+
+    @Test
+    fun publicKeysRoundTrip() {
+        val pair = Crypto.newKeyPair()
+        val encoded = Crypto.encodePublic(pair.public)
+        assertEquals(Crypto.PUBLIC_KEY_SIZE, encoded.size)
+        assertArrayEquals(encoded, Crypto.encodePublic(Crypto.decodePublic(encoded, params)))
+    }
+
+    @Test(expected = GeneralSecurityException::class)
+    fun pointsOffTheCurveAreRejected() {
+        val bad = hostPublic.copyOf()
+        bad[64] = (bad[64] + 1).toByte()
+        Crypto.decodePublic(bad, params)
+    }
+
+    @Test
+    fun sealedPacketsOpenAndEachUsesANewCounter() {
+        val cipher = StreamCipher(ByteArray(32) { 7 })
+        val first = cipher.seal(byteArrayOf(1, 2, 3))
+        val second = cipher.seal(byteArrayOf(1, 2, 3))
+        assertFalse(first.contentEquals(second))
+
+        val out = ByteArray(16)
+        assertEquals(3, cipher.open(first, first.size, out))
+        assertArrayEquals(byteArrayOf(1, 2, 3), out.copyOf(3))
+    }
+
+    @Test
+    fun tamperingAndWrongKeysAreRejected() {
+        val cipher = StreamCipher(ByteArray(32) { 7 })
+        val packet = cipher.seal(byteArrayOf(1, 2, 3))
+        val out = ByteArray(16)
+
+        assertEquals(-1, StreamCipher(ByteArray(32) { 8 }).open(packet, packet.size, out))
+
+        val tampered = packet.copyOf().also { it[13] = (it[13] + 1).toByte() }
+        assertEquals(-1, cipher.open(tampered, tampered.size, out))
+
+        val wrongCounter = packet.copyOf().also { it[4] = 9 }
+        assertEquals(-1, cipher.open(wrongCounter, wrongCounter.size, out))
     }
 }
 
@@ -191,6 +322,13 @@ class InputNormalizerTest {
         assertEquals((-32768).toShort(), InputNormalizer.axis(-1f))
         assertEquals(32767.toShort(), InputNormalizer.axis(5f))
         assertEquals(0.toShort(), InputNormalizer.axis(0f))
+    }
+
+    @Test
+    fun highCameraSensitivityStaysInsideTheStickRange() {
+        val highestGain = 0.75f * 4f
+        assertEquals(32767.toShort(), InputNormalizer.camera(50f, highestGain))
+        assertEquals((-32768).toShort(), InputNormalizer.camera(-50f, highestGain))
     }
 
     @Test

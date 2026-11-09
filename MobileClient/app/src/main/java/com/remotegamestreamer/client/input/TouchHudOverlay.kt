@@ -67,7 +67,10 @@ class TouchHudOverlay(
     /** Editor only: told the selected control's id, or null when nothing is selected. */
     var onSelectionChanged: ((String?) -> Unit)? = null
 
-    /** Set from the host's Welcome. Without it the Pad button is hidden, because the host would ignore the mouse. */
+    /** Called when the player lifts their finger off the Kbd button. */
+    var onKeyboardRequested: (() -> Unit)? = null
+
+    /** Set from the host's Welcome. Without it the Pad and Kbd buttons are hidden, because the host would ignore them. */
     var touchpadAvailable = false
         set(value) {
             field = value
@@ -151,7 +154,8 @@ class TouchHudOverlay(
         c.radius = c.spec.radiusDp * c.place.scale * density
     }
 
-    private fun isShown(c: Control) = c.spec.kind != ControlKind.TOUCHPAD_TOGGLE || touchpadAvailable
+    private fun isShown(c: Control) =
+        editMode || touchpadAvailable || (c.spec.kind != ControlKind.TOUCHPAD_TOGGLE && c.spec.kind != ControlKind.KEYBOARD)
 
     private fun isUsable(c: Control) = isShown(c) && c.place.visible
 
@@ -269,7 +273,10 @@ class TouchHudOverlay(
         val track = tracks.remove(id) ?: return
 
         when (track.target) {
-            Target.BUTTON -> release(track.button!!)
+            Target.BUTTON -> {
+                release(track.button!!)
+                if (!cancelled && track.button.spec.kind == ControlKind.KEYBOARD) onKeyboardRequested?.invoke()
+            }
             Target.STICK -> {
                 stickActive = false
                 synchronized(this) {
@@ -299,7 +306,7 @@ class TouchHudOverlay(
             ControlKind.LEFT_TRIGGER -> synchronized(this) { leftTrigger = 255 }
             ControlKind.RIGHT_TRIGGER -> synchronized(this) { rightTrigger = 255 }
             ControlKind.BIT -> synchronized(this) { buttonsMask = buttonsMask or b.spec.bit }
-            ControlKind.STICK -> Unit
+            ControlKind.KEYBOARD, ControlKind.STICK -> Unit
         }
     }
 
@@ -310,7 +317,7 @@ class TouchHudOverlay(
             ControlKind.LEFT_TRIGGER -> synchronized(this) { leftTrigger = 0 }
             ControlKind.RIGHT_TRIGGER -> synchronized(this) { rightTrigger = 0 }
             ControlKind.BIT -> synchronized(this) { buttonsMask = buttonsMask and b.spec.bit.inv() }
-            ControlKind.TOUCHPAD_TOGGLE, ControlKind.STICK -> Unit
+            ControlKind.TOUCHPAD_TOGGLE, ControlKind.KEYBOARD, ControlKind.STICK -> Unit
         }
     }
 

@@ -11,6 +11,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import com.remotegamestreamer.client.update.Updater
 
 class MainActivity : Activity() {
     private lateinit var address: EditText
@@ -66,5 +67,7 @@ class MainActivity : Activity() {
                 })
             },
         )
+
+        if (savedInstanceState == null) Updater(this).check(quiet = true)
     }
 }

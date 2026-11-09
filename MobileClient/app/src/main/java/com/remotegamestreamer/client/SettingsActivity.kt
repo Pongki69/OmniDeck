@@ -15,6 +15,8 @@ import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.Switch
 import android.widget.TextView
+import android.widget.Toast
+import com.remotegamestreamer.client.update.Updater
 
 class SettingsActivity : Activity() {
     private lateinit var settings: AppSettings
@@ -54,11 +56,31 @@ class SettingsActivity : Activity() {
         heading("Controls")
         toggle("Lock joystick in place (off: it appears where you touch)", settings.stickLocked) { settings.stickLocked = it }
         slider("Control opacity", 10, 100, settings.opacityPercent, { "$it%" }) { settings.opacityPercent = it }
-        slider("Camera sensitivity", 25, 200, settings.cameraSensitivityPercent, { "$it%" }) { settings.cameraSensitivityPercent = it }
+        slider("Camera sensitivity", 25, 400, settings.cameraSensitivityPercent, { "$it%" }) { settings.cameraSensitivityPercent = it }
         column.addView(
             Button(this).apply {
                 text = "Edit control layout"
                 setOnClickListener { startActivity(Intent(this@SettingsActivity, LayoutEditorActivity::class.java)) }
+            },
+        )
+
+        heading("Updates")
+        val updater = Updater(this)
+        column.addView(
+            Button(this).apply {
+                text = "Check for updates (you have ${updater.versionLabel})"
+                setOnClickListener { updater.check(quiet = false) }
+            },
+        )
+
+        heading("Security")
+        column.addView(
+            Button(this).apply {
+                text = "Forget saved PCs"
+                setOnClickListener {
+                    settings.forgetHostKeys()
+                    Toast.makeText(this@SettingsActivity, "The next PC you connect to will be trusted", Toast.LENGTH_SHORT).show()
+                }
             },
         )
 

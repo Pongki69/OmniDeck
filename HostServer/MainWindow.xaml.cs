@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO;
+using System.Net.Http;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -22,12 +24,14 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<LogRow> _rows = new();
     private readonly DispatcherTimer _uptime = new() { Interval = TimeSpan.FromSeconds(1) };
     private DateTime _connectedAt;
+    private AppRelease? _update;
 
     public MainWindow(HostEngine engine)
     {
         _engine = engine;
         InitializeComponent();
         LogList.ItemsSource = _rows;
+        RemoteInputBox.IsChecked = _engine.RemoteInputAllowed;
 
         foreach (var entry in AppLog.Snapshot()) AddRow(entry);
         AppLog.Written += OnLog;
@@ -36,7 +40,11 @@ public partial class MainWindow : Window
         _uptime.Tick += (_, _) => ShowUptime();
 
         StateChanged += (_, _) => Root.Margin = WindowState == WindowState.Maximized ? new Thickness(7) : new Thickness(0);
-        Loaded += (_, _) => _engine.Start();
+        Loaded += (_, _) =>
+        {
+            _engine.Start();
+            _ = CheckForUpdateAsync(reportResult: false);
+        };
         ShowStatus(_engine.Status);
     }
 
@@ -131,6 +139,59 @@ public partial class MainWindow : Window
             _engine.Start();
         }
     }
+
+    private async Task CheckForUpdateAsync(bool reportResult)
+    {
+        try
+        {
+            _update = await AppUpdater.CheckAsync();
+            if (_update != null)
+            {
+                UpdateButton.Content = $"Update to {_update.Version}";
+                UpdateButton.Visibility = Visibility.Visible;
+                AppLog.Info($"OmniDeck {_update.Version} is available.");
+            }
+            else if (reportResult)
+            {
+                AppLog.Info($"OmniDeck {AppUpdater.Current} is up to date.");
+            }
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException)
+        {
+            if (reportResult) AppLog.Warn($"Couldn't check for updates: {ex.Message}");
+        }
+    }
+
+    private void OnCheckForUpdates(object sender, RoutedEventArgs e) => _ = CheckForUpdateAsync(reportResult: true);
+
+    private async void OnInstallUpdate(object sender, RoutedEventArgs e)
+    {
+        if (_update is not { } release) return;
+        if (_engine.Status.State == HostState.Streaming)
+        {
+            AppLog.Warn("Disconnect the phone before updating.");
+            return;
+        }
+
+        UpdateButton.IsEnabled = false;
+        var progress = new Progress<int>(percent => UpdateButton.Content = $"Downloading {percent}%");
+        try
+        {
+            string stagedExe = await AppUpdater.DownloadAndStageAsync(release, progress);
+            UpdateButton.Content = "Restarting";
+            AppUpdater.LaunchFinisher(stagedExe);
+            Close();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or IOException or InvalidDataException or UnauthorizedAccessException or TaskCanceledException)
+        {
+            AppLog.Error($"Update failed: {ex.Message}");
+            UpdateButton.Content = $"Update to {release.Version}";
+            UpdateButton.IsEnabled = true;
+        }
+    }
+
+    private void OnRemoteInputToggle(object sender, RoutedEventArgs e) =>
+        _engine.RemoteInputAllowed = RemoteInputBox.IsChecked == true;
 
     private void OnCopyLogs(object sender, RoutedEventArgs e) =>
         Clipboard.SetText(string.Join(Environment.NewLine, AppLog.Snapshot().Select(l => $"{l.Time:HH:mm:ss} {l.Level} {l.Message}")));

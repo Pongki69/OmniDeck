@@ -16,9 +16,12 @@ public sealed class UdpInputServer : IDisposable
     private Thread? _receiveThread;
     private Thread? _watchdogThread;
 
-    public UdpInputServer(int port, SessionManager sessions)
+    public SecureTransport Transport { get; }
+
+    public UdpInputServer(int port, SessionManager sessions, HostIdentity identity)
     {
         _sessions = sessions;
+        Transport = new SecureTransport(identity, sessions);
         _socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
         // Without this, an ICMP "port unreachable" from a vanished phone makes ReceiveFrom throw.
         _socket.IOControl(SIO_UDP_CONNRESET, new byte[] { 0 }, null);
@@ -47,7 +50,7 @@ public sealed class UdpInputServer : IDisposable
             {
                 int n = _socket.ReceiveFrom(buffer, ref remote);
                 var from = (IPEndPoint)remote;
-                byte[]? reply = _sessions.HandleDatagram(buffer.AsSpan(0, n), from, _clock.ElapsedMilliseconds);
+                byte[]? reply = Transport.HandleDatagram(buffer.AsSpan(0, n), from, _clock.ElapsedMilliseconds);
                 if (reply != null) _socket.SendTo(reply, from);
             }
             catch (SocketException) when (_cts.IsCancellationRequested) { return; }

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace RemoteGameStreamer.Host.Network;
 
@@ -17,14 +18,32 @@ public static class Protocol
     public const byte TypeWelcome = 0x02;
     public const byte TypeInput = 0x03;
     public const byte TypeBye = 0x04;
+    public const byte TypeKeyboard = 0x05;
+    public const byte TypeKeyboardAck = 0x06;
+    public const byte TypeKeyRequest = 0x07;
+    public const byte TypeKeyReply = 0x08;
+    public const byte TypeSecureHello = 0x09;
     public const byte TypeVideo = 0x10;
     public const byte TypeAudio = 0x11;
+    public const byte TypeSealed = 0x20;
 
     public const int HeaderSize = 4;
     public const int HelloSize = 20;   // hdr | pin u32 | videoPort u16 | audioPort u16 (0 = no sound) | maxHeight u16 | fps u8 | bitrateMbps u8 | codec u8 | reserved[3]
     public const int WelcomeSize = 20; // hdr | status u8 | codec u8 | fps u8 | mouseEnabled u8 | token u32 | w u16 | h u16 | sampleRate u32
     public const int InputSize = 12 + ControllerStatePacket.Size; // hdr | token u32 | seq u32 | body
     public const int ByeSize = 8;      // hdr | token u32
+    public const int KeyboardHeaderSize = 14; // hdr | token u32 | id u32 | key u8 | reserved u8 | UTF-16LE text
+    public const int MaxKeyboardChars = 256;
+    public const int KeyboardAckSize = 9;     // hdr | id u32 | accepted u8
+    public const int KeyReplySize = 69;       // hdr | host public key
+    public const int KeyRequestSize = 69;     // hdr | padding, as large as the reply so this can't amplify spoofed traffic
+    public const int SecureHelloSize = 105;   // hdr | client public key | encrypted Hello | tag
+    public const int SealedHeaderSize = 12;   // hdr | counter u64
+
+    public const byte KeyNone = 0;
+    public const byte KeyBackspace = 1;
+    public const byte KeyTab = 2;
+    public const byte KeyEnter = 3;
 
     public const byte CodecDefault = 0;
     public const byte CodecH264 = 1;
@@ -72,6 +91,32 @@ public static class Protocol
 
     public static uint ReadToken(ReadOnlySpan<byte> d) => BinaryPrimitives.ReadUInt32LittleEndian(d[4..]);
     public static uint ReadSeq(ReadOnlySpan<byte> d) => BinaryPrimitives.ReadUInt32LittleEndian(d[8..]);
+
+    public static byte[] BuildKeyReply(ReadOnlySpan<byte> hostPublic)
+    {
+        var d = new byte[KeyReplySize];
+        WriteHeader(d, TypeKeyReply);
+        hostPublic.CopyTo(d.AsSpan(HeaderSize));
+        return d;
+    }
+
+    public static bool IsValidKeyboard(ReadOnlySpan<byte> d)
+    {
+        int textBytes = d.Length - KeyboardHeaderSize;
+        return textBytes >= 0 && textBytes <= MaxKeyboardChars * 2 && textBytes % 2 == 0;
+    }
+
+    public static byte ReadKeyboardKey(ReadOnlySpan<byte> d) => d[12];
+    public static string ReadKeyboardText(ReadOnlySpan<byte> d) => Encoding.Unicode.GetString(d[KeyboardHeaderSize..]);
+
+    public static byte[] BuildKeyboardAck(uint id, bool accepted)
+    {
+        var d = new byte[KeyboardAckSize];
+        WriteHeader(d, TypeKeyboardAck);
+        BinaryPrimitives.WriteUInt32LittleEndian(d.AsSpan(4), id);
+        d[8] = accepted ? (byte)1 : (byte)0;
+        return d;
+    }
 
     public static ControllerStatePacket ReadControllerState(ReadOnlySpan<byte> inputDatagram) =>
         MemoryMarshal.Read<ControllerStatePacket>(inputDatagram[12..]);

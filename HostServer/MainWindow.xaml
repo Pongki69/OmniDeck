@@ -27,6 +27,7 @@
                     </Border>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top">
+                    <Button x:Name="UpdateButton" Style="{StaticResource Action}" Visibility="Collapsed" WindowChrome.IsHitTestVisibleInChrome="True" Click="OnInstallUpdate" Padding="12,5" Margin="0,8,10,0" />
                     <Button Style="{StaticResource WindowButton}" Content="&#x2014;" WindowChrome.IsHitTestVisibleInChrome="True" Click="OnMinimize" ToolTip="Minimize" />
                     <Button Style="{StaticResource WindowButton}" Content="&#x25A1;" WindowChrome.IsHitTestVisibleInChrome="True" Click="OnMaximize" ToolTip="Maximize" />
                     <Button Style="{StaticResource WindowButton}" Content="&#x2715;" WindowChrome.IsHitTestVisibleInChrome="True" Click="OnClose" ToolTip="Close" />
@@ -60,6 +61,9 @@
                         <Button DockPanel.Dock="Bottom" x:Name="ServerButton" Style="{StaticResource Action}" Click="OnServerToggle" Padding="14,11">
                             <TextBlock x:Name="ServerButtonText" Text="Stop server" FontWeight="SemiBold" />
                         </Button>
+
+                        <TextBlock DockPanel.Dock="Bottom" Text="For logging in. Tick before connecting, turn off when done." Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,14" />
+                        <CheckBox DockPanel.Dock="Bottom" x:Name="RemoteInputBox" Content="Allow mouse and keyboard from phone" Foreground="{StaticResource Text}" FontSize="13" Click="OnRemoteInputToggle" />
                     </DockPanel>
                 </Border>
 
@@ -127,6 +131,7 @@
                             <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
                                 <TextBlock Text="Logs" Foreground="{StaticResource Text}" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Center" />
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                    <Button Style="{StaticResource Action}" Content="Check for updates" Click="OnCheckForUpdates" Padding="12,5" Margin="0,0,8,0" />
                                     <Button Style="{StaticResource Action}" Content="Copy" Click="OnCopyLogs" Padding="12,5" />
                                     <Button Style="{StaticResource Action}" Content="Open log folder" Click="OnOpenLogs" Padding="12,5" Margin="8,0,0,0" />
                                 </StackPanel>

@@ -12,6 +12,14 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        if (e.Args is ["--finish-update", var targetDir, var pidText] && int.TryParse(pidText, out int pid))
+        {
+            AppUpdater.FinishUpdate(targetDir, pid);
+            Shutdown(0);
+            return;
+        }
+
         AppLog.Initialize();
         DispatcherUnhandledException += (_, args) =>
         {

@@ -28,6 +28,8 @@ public sealed class SessionManager
     private bool _anyInput;
     private bool _neutral = true;
     private long _lastPacketMs;
+    private uint _lastKeyboardId;
+    private bool _lastKeyboardAccepted;
 
     public event Action<SessionInfo>? SessionStarted;
     public event Action<SessionInfo>? SessionEnded;
@@ -63,6 +65,9 @@ public sealed class SessionManager
             case Protocol.TypeBye when d.Length == Protocol.ByeSize:
                 HandleBye(Protocol.ReadToken(d), from);
                 return null;
+
+            case Protocol.TypeKeyboard when Protocol.IsValidKeyboard(d):
+                return HandleKeyboard(d, from, nowMs);
 
             default:
                 return null;
@@ -115,6 +120,8 @@ public sealed class SessionManager
             _session = started;
             _anyInput = false;
             _lastSeq = 0;
+            _lastKeyboardId = 0;
+            _lastKeyboardAccepted = false;
             _lastPacketMs = nowMs;
             reply = Protocol.BuildWelcome(Protocol.WelcomeStatus.Ok, started.Token, parameters);
         }
@@ -139,6 +146,25 @@ public sealed class SessionManager
             _lastSeq = seq;
             _neutral = false;
             _pad.ProcessInputPacket(Protocol.ReadControllerState(d));
+        }
+    }
+
+    /// <summary>The phone resends until acknowledged, so a repeated id is acknowledged but never typed twice.</summary>
+    private byte[]? HandleKeyboard(ReadOnlySpan<byte> d, IPEndPoint from, long nowMs)
+    {
+        lock (_lock)
+        {
+            if (_session is not { } s || !s.Control.Equals(from) || Protocol.ReadToken(d) != s.Token) return null;
+
+            _lastPacketMs = nowMs;
+
+            uint id = Protocol.ReadSeq(d);
+            if (id > _lastKeyboardId)
+            {
+                _lastKeyboardId = id;
+                _lastKeyboardAccepted = _pad.TypeText(Protocol.ReadKeyboardText(d), Protocol.ReadKeyboardKey(d));
+            }
+            return Protocol.BuildKeyboardAck(id, _lastKeyboardAccepted);
         }
     }
 

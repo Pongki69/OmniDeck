@@ -46,7 +46,18 @@ class AppSettings(context: Context) {
 
     fun streamRequest() = Protocol.StreamRequest(maxHeight, fps, bitrateMbps, hevc, sound)
 
+    fun hostKey(address: String): String? = prefs.getString(HOST_KEY_PREFIX + address, null)
+
+    fun rememberHostKey(address: String, key: String) = prefs.edit().putString(HOST_KEY_PREFIX + address, key).apply()
+
+    fun forgetHostKeys() {
+        val editor = prefs.edit()
+        prefs.all.keys.filter { it.startsWith(HOST_KEY_PREFIX) }.forEach(editor::remove)
+        editor.apply()
+    }
+
     companion object {
+        private const val HOST_KEY_PREFIX = "hostKey_"
         val RESOLUTIONS = listOf(720, 900, 1080, 1440, 2160)
         val FRAME_RATES = listOf(30, 60, 90, 120)
         const val MIN_BITRATE = 5
