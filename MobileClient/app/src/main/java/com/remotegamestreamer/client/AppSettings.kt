@@ -58,6 +58,8 @@ class AppSettings(context: Context) {
 
     companion object {
         private const val HOST_KEY_PREFIX = "hostKey_"
+        const val MIN_CAMERA_SENSITIVITY = 25
+        const val MAX_CAMERA_SENSITIVITY = 400
         val RESOLUTIONS = listOf(720, 900, 1080, 1440, 2160)
         val FRAME_RATES = listOf(30, 60, 90, 120)
         const val MIN_BITRATE = 5
