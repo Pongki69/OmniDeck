@@ -17,6 +17,8 @@ import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.SeekBar
+import android.widget.TextView
 import android.widget.Toast
 import com.remotegamestreamer.client.audio.AudioPlayer
 import com.remotegamestreamer.client.decoder.FrameReassembler
@@ -41,6 +43,7 @@ class StreamActivity : Activity() {
     private var sender: UdpInputSender? = null
     @Volatile private var keyboard: KeyboardSender? = null
     private var keyboardDialog: AlertDialog? = null
+    private var sensitivityDialog: AlertDialog? = null
     private var audio: AudioPlayer? = null
     private var videoThread: Thread? = null
     @Volatile private var closing = false
@@ -57,6 +60,7 @@ class StreamActivity : Activity() {
         video = VideoRenderSurface(this).apply { onDecoderError = { fail(it) } }
         hud = TouchHudOverlay(this, settings.layout, settings.opacityPercent, settings.stickLocked, settings.cameraSensitivityPercent)
         hud.onKeyboardRequested = ::showKeyboardDialog
+        hud.onCameraSensitivityRequested = ::showCameraSensitivityDialog
 
         setContentView(
             FrameLayout(this).apply {
@@ -171,6 +175,49 @@ class StreamActivity : Activity() {
         field.requestFocus()
     }
 
+    /** Stays open without blocking the screen behind it, so the player can swipe to try each setting. */
+    private fun showCameraSensitivityDialog() {
+        if (sensitivityDialog?.isShowing == true) return
+
+        val min = AppSettings.MIN_CAMERA_SENSITIVITY
+        val label = TextView(this).apply { text = "Swipe sensitivity: ${settings.cameraSensitivityPercent}%" }
+        val slider = SeekBar(this).apply {
+            max = AppSettings.MAX_CAMERA_SENSITIVITY - min
+            progress = settings.cameraSensitivityPercent.coerceIn(min, AppSettings.MAX_CAMERA_SENSITIVITY) - min
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, value: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    val percent = min + value
+                    label.text = "Swipe sensitivity: $percent%"
+                    hud.setCameraSensitivity(percent)
+                    settings.cameraSensitivityPercent = percent
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+
+        val padding = (16 * resources.displayMetrics.density).toInt()
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(padding, padding, padding, 0)
+            addView(label)
+            addView(slider)
+        }
+
+        sensitivityDialog = AlertDialog.Builder(this)
+            .setView(content)
+            .setPositiveButton("Done", null)
+            .create()
+            .apply {
+                setCanceledOnTouchOutside(false)
+                window?.setGravity(Gravity.TOP)
+                window?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                window?.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL)
+                show()
+            }
+    }
+
     private fun onKeyboardResult(result: KeyboardSender.Result) {
         val message = when (result) {
             KeyboardSender.Result.REFUSED -> "Turn on \"Allow mouse and keyboard from phone\" on the PC"
@@ -226,6 +273,7 @@ class StreamActivity : Activity() {
 
     override fun onDestroy() {
         keyboardDialog?.dismiss()
+        sensitivityDialog?.dismiss()
         synchronized(this) {
             closing = true
             keyboard?.stop()

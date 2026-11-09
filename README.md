@@ -52,7 +52,9 @@ resolution, frame rate, bitrate and codec options below only apply if a client l
 Settings > **Edit control layout** moves, resizes and hides controls. The joystick stays in one
 place by default; turn off "Lock joystick in place" to have it appear where you touch.
 
-Drag on any free area to move the camera. Settings > **Camera sensitivity** goes up to 400%.
+Drag on any free area to move the camera. Tap **Sens** during a stream to change how sensitive the
+swipe is, up to 400%. It applies immediately and you can swipe to try it while the slider is open.
+The same setting is in Settings > **Camera sensitivity**.
 
 With mouse and keyboard allowed, a **Pad** button switches the free area to a touchpad: drag moves
 the mouse, tap clicks, two-finger tap right-clicks. To type into a login form, use the touchpad to

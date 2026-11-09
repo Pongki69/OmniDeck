@@ -42,7 +42,7 @@ jobs:
 
       - name: Build Windows app
         run: |
-          dotnet publish HostServer/HostServer.csproj -c Release -r win-x64 --self-contained true -p:Version=$env:VERSION -o dist/OmniDeck
+          dotnet publish HostServer/HostServer.csproj -c Release -r win-x64 --self-contained true "-p:Version=$env:VERSION" -o dist/OmniDeck
           if ($LASTEXITCODE -ne 0) { throw "Publish failed" }
 
       - name: Add FFmpeg
@@ -71,7 +71,7 @@ jobs:
           $keystore = Join-Path $env:RUNNER_TEMP 'omnideck-release.jks'
           [IO.File]::WriteAllBytes($keystore, [Convert]::FromBase64String($env:KEYSTORE_BASE64))
           $env:OMNIDECK_KEYSTORE = $keystore
-          gradle --no-daemon testDebugUnitTest assembleRelease -PappVersion=$env:VERSION
+          gradle --no-daemon testDebugUnitTest assembleRelease "-PappVersion=$env:VERSION"
           $built = $LASTEXITCODE
           Remove-Item $keystore
           if ($built -ne 0) { throw "Android build failed" }

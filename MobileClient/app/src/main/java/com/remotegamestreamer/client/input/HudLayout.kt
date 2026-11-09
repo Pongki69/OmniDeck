@@ -1,6 +1,6 @@
 package com.remotegamestreamer.client.input
 
-enum class ControlKind { BIT, LEFT_TRIGGER, RIGHT_TRIGGER, TOUCHPAD_TOGGLE, KEYBOARD, STICK }
+enum class ControlKind { BIT, LEFT_TRIGGER, RIGHT_TRIGGER, TOUCHPAD_TOGGLE, KEYBOARD, CAMERA_SENSITIVITY, STICK }
 
 class ControlSpec(
     val id: String,
@@ -37,6 +37,7 @@ object HudCatalog {
         bit("dright", "▶", ControllerState.DPAD_RIGHT, 0.62f, 0.08f, 20f),
         ControlSpec("pad", "Pad", ControlKind.TOUCHPAD_TOGGLE, 0, 0.46f, 0.24f, 24f),
         ControlSpec("kbd", "Kbd", ControlKind.KEYBOARD, 0, 0.54f, 0.24f, 24f),
+        ControlSpec("sens", "Sens", ControlKind.CAMERA_SENSITIVITY, 0, 0.62f, 0.24f, 24f),
     )
 }
 

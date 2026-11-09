@@ -45,7 +45,7 @@ class TouchHudOverlay(
     private val buttons = controls.filter { it !== stick }
 
     private val alphaScale = opacityPercent / 50f
-    private val cameraGain = BASE_CAMERA_GAIN * cameraSensitivityPercent / 100f
+    private var cameraGain = BASE_CAMERA_GAIN * cameraSensitivityPercent / 100f
 
     private val tracks = HashMap<Int, Track>()
     private val stickOut = ShortArray(2)
@@ -69,6 +69,14 @@ class TouchHudOverlay(
 
     /** Called when the player lifts their finger off the Kbd button. */
     var onKeyboardRequested: (() -> Unit)? = null
+
+    /** Called when the player lifts their finger off the Sens button. */
+    var onCameraSensitivityRequested: (() -> Unit)? = null
+
+    /** Applies to the next camera movement. Call on the UI thread. */
+    fun setCameraSensitivity(percent: Int) {
+        cameraGain = BASE_CAMERA_GAIN * percent / 100f
+    }
 
     /** Set from the host's Welcome. Without it the Pad and Kbd buttons are hidden, because the host would ignore them. */
     var touchpadAvailable = false
@@ -275,7 +283,13 @@ class TouchHudOverlay(
         when (track.target) {
             Target.BUTTON -> {
                 release(track.button!!)
-                if (!cancelled && track.button.spec.kind == ControlKind.KEYBOARD) onKeyboardRequested?.invoke()
+                if (!cancelled) {
+                    when (track.button.spec.kind) {
+                        ControlKind.KEYBOARD -> onKeyboardRequested?.invoke()
+                        ControlKind.CAMERA_SENSITIVITY -> onCameraSensitivityRequested?.invoke()
+                        else -> Unit
+                    }
+                }
             }
             Target.STICK -> {
                 stickActive = false
@@ -306,7 +320,7 @@ class TouchHudOverlay(
             ControlKind.LEFT_TRIGGER -> synchronized(this) { leftTrigger = 255 }
             ControlKind.RIGHT_TRIGGER -> synchronized(this) { rightTrigger = 255 }
             ControlKind.BIT -> synchronized(this) { buttonsMask = buttonsMask or b.spec.bit }
-            ControlKind.KEYBOARD, ControlKind.STICK -> Unit
+            ControlKind.KEYBOARD, ControlKind.CAMERA_SENSITIVITY, ControlKind.STICK -> Unit
         }
     }
 
@@ -317,7 +331,7 @@ class TouchHudOverlay(
             ControlKind.LEFT_TRIGGER -> synchronized(this) { leftTrigger = 0 }
             ControlKind.RIGHT_TRIGGER -> synchronized(this) { rightTrigger = 0 }
             ControlKind.BIT -> synchronized(this) { buttonsMask = buttonsMask and b.spec.bit.inv() }
-            ControlKind.TOUCHPAD_TOGGLE, ControlKind.KEYBOARD, ControlKind.STICK -> Unit
+            ControlKind.TOUCHPAD_TOGGLE, ControlKind.KEYBOARD, ControlKind.CAMERA_SENSITIVITY, ControlKind.STICK -> Unit
         }
     }
 
