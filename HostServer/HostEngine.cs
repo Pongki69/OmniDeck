@@ -40,8 +40,35 @@ public sealed class HostEngine : IDisposable
     private UdpInputServer? _server;
     private Timer? _statsTimer;
     private long _lastFrames, _lastBytes;
+    private volatile bool _remoteInput;
 
-    public HostEngine(HostOptions options) => _options = options;
+    public HostEngine(HostOptions options)
+    {
+        _options = options;
+        _remoteInput = options.Mouse;
+    }
+
+    /// <summary>Whether the phone may use the PC's mouse and keyboard. Turning on takes effect at the next connection.</summary>
+    public bool RemoteInputAllowed
+    {
+        get => _remoteInput;
+        set
+        {
+            if (_remoteInput == value) return;
+            _remoteInput = value;
+            _pad?.SetRemoteInput(value);
+            AppLog.Info(value
+                ? "Mouse and keyboard from the phone are on. If the phone is already connected, reconnect it to get the Pad and Kbd buttons."
+                : "Mouse and keyboard from the phone are off.");
+            if (value) WarnIfNotAdministrator();
+        }
+    }
+
+    private static void WarnIfNotAdministrator()
+    {
+        if (!new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator))
+            AppLog.Warn("Games running as administrator will ignore the phone's mouse and keyboard unless OmniDeck also runs as administrator.");
+    }
 
     public HostStatus Status { get; private set; } = new(HostState.Stopped);
     public event Action<HostStatus>? StatusChanged;
@@ -86,7 +113,7 @@ public sealed class HostEngine : IDisposable
             VirtualPadManager? pad = null;
             if (!_options.NoPad)
             {
-                pad = new VirtualPadManager(_options.Mouse);
+                pad = new VirtualPadManager(_remoteInput);
                 try
                 {
                     pad.Initialize();
@@ -115,10 +142,10 @@ public sealed class HostEngine : IDisposable
 
             uint pin = _options.Pin ?? (uint)RandomNumberGenerator.GetInt32(0, 1_000_000);
             var defaults = new StreamDefaults(_options.Codec, _options.MaxHeight, _options.Fps, _options.Bitrate,
-                probe.DesktopWidth, probe.DesktopHeight, hevcAvailable, sampleRate, _options.Mouse);
+                probe.DesktopWidth, probe.DesktopHeight, hevcAvailable, sampleRate, MouseEnabled: false);
 
             var sessions = new SessionManager((IPadSink?)pad ?? new NullPadSink(), pin,
-                hello => StreamNegotiator.Negotiate(hello, defaults with { DisplayHz = DisplayInfo.PrimaryRefreshHz() }));
+                hello => StreamNegotiator.Negotiate(hello, defaults with { DisplayHz = DisplayInfo.PrimaryRefreshHz(), MouseEnabled = _remoteInput && pad != null }));
             var pipeline = new StreamPipeline(ffmpeg, probe.Encoder, _options.Output, _audio);
 
             sessions.SessionStarted += OnSessionStarted;
@@ -128,7 +155,8 @@ public sealed class HostEngine : IDisposable
 
             try
             {
-                _server = new UdpInputServer(_options.Port, sessions);
+                string identityPath = Path.Combine(Path.GetDirectoryName(AppLog.Folder)!, "host-identity.bin");
+                _server = new UdpInputServer(_options.Port, sessions, HostIdentity.LoadOrCreate(identityPath));
             }
             catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
             {
@@ -141,8 +169,7 @@ public sealed class HostEngine : IDisposable
             _lastFrames = _lastBytes = 0;
             _statsTimer = new Timer(_ => ReportStats(), null, 1000, 1000);
 
-            if (_options.Mouse && !new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator))
-                AppLog.Warn("Mouse input is on, but games running as administrator will ignore it unless OmniDeck is too.");
+            if (_remoteInput) WarnIfNotAdministrator();
 
             var addresses = LocalAddresses().ToArray();
             AppLog.Info($"Ready on UDP port {_options.Port}. PC address: {string.Join(", ", addresses.Select(a => a.Ip))}");
@@ -179,7 +206,7 @@ public sealed class HostEngine : IDisposable
         }
 
         _lastFrames = _lastBytes = 0;
-        _pipeline?.Start(s);
+        if (_server?.Transport.HandshakeKeys is { } keys) _pipeline?.Start(s, keys);
         lock (_gate) Publish(Status with { State = HostState.Streaming, Session = s });
     }
 

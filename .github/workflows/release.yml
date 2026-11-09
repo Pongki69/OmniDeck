@@ -1,0 +1,83 @@
+name: Release
+
+# Runs when a version tag such as v1.2.3 is pushed. Tests both apps, builds them, signs them
+# and publishes a GitHub Release that the installed apps update from.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version from tag
+        run: |
+          if ($env:GITHUB_REF_NAME -notmatch '^v\d{1,3}\.\d{1,2}\.\d{1,2}$') { throw "Tag must look like v1.2.3" }
+          "VERSION=$($env:GITHUB_REF_NAME.Substring(1))" >> $env:GITHUB_ENV
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Test Windows app
+        run: dotnet test HostServer.Tests -c Release
+
+      - name: Build Windows app
+        run: |
+          dotnet publish HostServer/HostServer.csproj -c Release -r win-x64 --self-contained true -p:Version=$env:VERSION -o dist/OmniDeck
+          if ($LASTEXITCODE -ne 0) { throw "Publish failed" }
+
+      - name: Add FFmpeg
+        run: |
+          Invoke-WebRequest -Uri https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip ffmpeg-unpacked
+          Copy-Item (Get-ChildItem ffmpeg-unpacked -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName dist/OmniDeck/ffmpeg.exe
+
+      - name: Package and sign Windows app
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          Compress-Archive -Path dist/OmniDeck/* -DestinationPath OmniDeck-windows.zip
+          Set-Content -Path update-key.pem -Value $env:UPDATE_SIGNING_KEY
+          openssl dgst -sha256 -sign update-key.pem -out OmniDeck-windows.zip.sig OmniDeck-windows.zip
+          $signed = $LASTEXITCODE
+          Remove-Item update-key.pem
+          if ($signed -ne 0) { throw "Signing failed" }
+
+      - name: Test and build Android app
+        working-directory: MobileClient
+        env:
+          OMNIDECK_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          $keystore = Join-Path $env:RUNNER_TEMP 'omnideck-release.jks'
+          [IO.File]::WriteAllBytes($keystore, [Convert]::FromBase64String($env:KEYSTORE_BASE64))
+          $env:OMNIDECK_KEYSTORE = $keystore
+          gradle --no-daemon testDebugUnitTest assembleRelease -PappVersion=$env:VERSION
+          $built = $LASTEXITCODE
+          Remove-Item $keystore
+          if ($built -ne 0) { throw "Android build failed" }
+          Copy-Item app/build/outputs/apk/release/app-release.apk ../OmniDeck.apk
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create $env:GITHUB_REF_NAME OmniDeck-windows.zip OmniDeck-windows.zip.sig OmniDeck.apk --title "OmniDeck $env:VERSION" --generate-notes

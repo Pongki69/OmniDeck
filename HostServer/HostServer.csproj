@@ -8,6 +8,7 @@
     <AssemblyName>OmniDeck</AssemblyName>
     <ApplicationIcon>Assets\omnideck.ico</ApplicationIcon>
     <Product>OmniDeck</Product>
+    <Version>1.0.0</Version>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ServerGarbageCollection>false</ServerGarbageCollection>

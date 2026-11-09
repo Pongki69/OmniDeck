@@ -14,6 +14,10 @@ public sealed class MediaSender : IDisposable
     private readonly Socket _audio = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
     private readonly VideoPacketizer _packetizer = new();
     private readonly byte[] _audioDatagram = new byte[8 + AudioChunkBytes];
+    private readonly byte[] _sealedAudio = new byte[8 + AudioChunkBytes + StreamCipher.Overhead];
+    private readonly byte[] _sealedVideo = new byte[VideoPacketizer.DefaultPayloadSize + 64 + StreamCipher.Overhead];
+    private readonly StreamCipher _videoCipher;
+    private readonly StreamCipher _audioCipher;
     private readonly double _paceWindowTicks;
     private uint _frameId;
     private uint _audioSeq;
@@ -23,8 +27,10 @@ public sealed class MediaSender : IDisposable
     public long Frames => Interlocked.Read(ref _frames);
     public long Bytes => Interlocked.Read(ref _bytes);
 
-    public MediaSender(SessionInfo session, int fps)
+    public MediaSender(SessionInfo session, int fps, SessionKeys keys)
     {
+        _videoCipher = keys.Video;
+        _audioCipher = keys.Audio;
         _video.SendBufferSize = 4 * 1024 * 1024;
         _video.Connect(session.Video);
         _audioEnabled = session.Audio.Port != 0; // the phone sends port 0 when sound is off
@@ -44,10 +50,13 @@ public sealed class MediaSender : IDisposable
         int sent = 0;
         var socket = _video;
         double window = _paceWindowTicks;
+        var cipher = _videoCipher;
+        var output = _sealedVideo;
 
         _packetizer.Packetize(frame, ++_frameId, keyframe, datagram =>
         {
-            try { socket.Send(datagram); }
+            int length = cipher.Seal(datagram, output);
+            try { socket.Send(output.AsSpan(0, length)); }
             catch (SocketException) { /* phone briefly unreachable: UDP, carry on */ }
 
             sent++;
@@ -75,7 +84,8 @@ public sealed class MediaSender : IDisposable
             int n = Math.Min(AudioChunkBytes, pcm.Length);
             BinaryPrimitives.WriteUInt32LittleEndian(_audioDatagram.AsSpan(4), ++_audioSeq);
             pcm[..n].CopyTo(_audioDatagram.AsSpan(8));
-            try { _audio.Send(_audioDatagram.AsSpan(0, 8 + n)); }
+            int length = _audioCipher.Seal(_audioDatagram.AsSpan(0, 8 + n), _sealedAudio);
+            try { _audio.Send(_sealedAudio.AsSpan(0, length)); }
             catch (SocketException) { }
             pcm = pcm[n..];
         }

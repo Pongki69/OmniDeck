@@ -4,6 +4,7 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
 import com.remotegamestreamer.client.net.Protocol
+import com.remotegamestreamer.client.net.StreamCipher
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -12,7 +13,12 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /** Plays the host's raw stereo PCM with the smallest buffer the device allows. */
-class AudioPlayer(private val socket: DatagramSocket, private val host: InetAddress, sampleRate: Int) {
+class AudioPlayer(
+    private val socket: DatagramSocket,
+    private val host: InetAddress,
+    sampleRate: Int,
+    private val cipher: StreamCipher,
+) {
     private val track: AudioTrack
     private var thread: Thread? = null
     @Volatile private var running = false
@@ -49,7 +55,8 @@ class AudioPlayer(private val socket: DatagramSocket, private val host: InetAddr
     private fun loop() {
         val buffer = ByteArray(2048)
         val packet = DatagramPacket(buffer, buffer.size)
-        val header = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN)
+        val plain = ByteArray(2048)
+        val header = ByteBuffer.wrap(plain).order(ByteOrder.LITTLE_ENDIAN)
         var lastSeq = 0L
 
         while (running) {
@@ -58,14 +65,16 @@ class AudioPlayer(private val socket: DatagramSocket, private val host: InetAddr
             } catch (_: SocketException) {
                 return // socket closed on teardown
             }
-            if (packet.address != host || packet.length <= 8 || !Protocol.hasHeader(buffer, packet.length, Protocol.TYPE_AUDIO)) continue
+            if (packet.address != host) continue
+            val length = cipher.open(buffer, packet.length, plain)
+            if (length <= 8 || !Protocol.hasHeader(plain, length, Protocol.TYPE_AUDIO)) continue
 
             val seq = header.getInt(4).toLong() and 0xFFFFFFFFL
             if (seq <= lastSeq) continue
             lastSeq = seq
 
             // Non-blocking: when the buffer is full, the excess is dropped so delay cannot grow.
-            track.write(buffer, 8, packet.length - 8, AudioTrack.WRITE_NON_BLOCKING)
+            track.write(plain, 8, length - 8, AudioTrack.WRITE_NON_BLOCKING)
         }
     }
 

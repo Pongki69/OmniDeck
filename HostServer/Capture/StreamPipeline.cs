@@ -22,14 +22,14 @@ public sealed class StreamPipeline : IDisposable
         if (audio != null) audio.OnPcm = pcm => _sender?.SendAudio(pcm.Span);
     }
 
-    public void Start(SessionInfo session)
+    public void Start(SessionInfo session, SessionKeys keys)
     {
         lock (_lock)
         {
             StopLocked();
             _active = session;
             var p = session.Parameters;
-            var sender = new MediaSender(session, p.Fps);
+            var sender = new MediaSender(session, p.Fps, keys);
             var cts = new CancellationTokenSource();
             var encoder = new ScreenEncoder(new CaptureSettings(_ffmpeg, _encoder, p.Codec, _output, p.Width, p.Height, p.Fps, p.BitrateMbps));
 

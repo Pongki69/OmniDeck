@@ -1,6 +1,7 @@
 package com.remotegamestreamer.client.input
 
 import com.remotegamestreamer.client.net.Protocol
+import com.remotegamestreamer.client.net.StreamCipher
 import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -10,6 +11,7 @@ import java.util.concurrent.locks.LockSupport
 class UdpInputSender(
     private val socket: DatagramSocket,
     private val token: Int,
+    private val cipher: StreamCipher,
     private val sample: (ControllerState) -> Unit,
 ) {
     @Volatile private var running = false
@@ -26,7 +28,6 @@ class UdpInputSender(
     private fun loop() {
         val state = ControllerState()
         val bytes = ByteArray(Protocol.INPUT_SIZE)
-        val packet = DatagramPacket(bytes, bytes.size)
         var seq = 0
         var next = System.nanoTime()
 
@@ -34,7 +35,8 @@ class UdpInputSender(
             sample(state)
             Protocol.writeInput(bytes, token, ++seq, state)
             try {
-                socket.send(packet)
+                val sealed = cipher.seal(bytes)
+                socket.send(DatagramPacket(sealed, sealed.size))
             } catch (_: IOException) {
                 // Transient Wi-Fi loss. The host's watchdog releases held inputs if this persists.
             }
@@ -49,7 +51,7 @@ class UdpInputSender(
         }
 
         try {
-            val bye = Protocol.buildBye(token)
+            val bye = cipher.seal(Protocol.buildBye(token))
             socket.send(DatagramPacket(bye, bye.size))
         } catch (_: IOException) {
             // Host will time the session out instead.

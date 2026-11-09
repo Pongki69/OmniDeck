@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Threading.Channels;
 using Nefarius.ViGEm.Client;
 using Nefarius.ViGEm.Client.Targets;
 using Nefarius.ViGEm.Client.Targets.Xbox360;
@@ -12,6 +13,9 @@ public interface IPadSink
 
     /// <summary>Releases every button, centers sticks, and lets go of held mouse buttons.</summary>
     void Neutralize();
+
+    /// <summary>Queues text, then an optional special key, for the focused window. False if keyboard input is off.</summary>
+    bool TypeText(string text, byte key);
 }
 
 /// <summary>Works out which mouse buttons changed, so a held button is one press rather than 200/s.</summary>
@@ -28,11 +32,17 @@ public static class MouseEdges
     }
 }
 
-/// <summary>Virtual Xbox 360 pad through ViGEmBus, plus SendInput for touchpad mode.</summary>
+/// <summary>Virtual Xbox 360 pad through ViGEmBus, plus SendInput for touchpad mode and typed text.</summary>
 public sealed class VirtualPadManager : IPadSink, IDisposable
 {
     private const uint InputMouse = 0;
+    private const uint InputKeyboard = 1;
     private const uint MouseMove = 0x0001;
+    private const uint KeyUp = 0x0002;
+    private const uint KeyUnicode = 0x0004;
+    private const int KeyIntervalMs = 20; // 50 keys/s at most, well inside a normal keyboard's report rate
+
+    private readonly record struct TypingJob(string Text, byte Key, int Generation);
 
     private ViGEmClient? _client;
     private IXbox360Controller? _controller;
@@ -40,10 +50,82 @@ public sealed class VirtualPadManager : IPadSink, IDisposable
     private bool _hasLast;
     private byte _mouseButtons;
     private readonly object _sync = new();
-    private readonly bool _mouseEnabled;
+    private bool _mouseEnabled;
     private object? _owner;
+    private readonly Channel<TypingJob> _typing = Channel.CreateUnbounded<TypingJob>(new UnboundedChannelOptions { SingleReader = true });
+    private int _typingGeneration;
 
-    public VirtualPadManager(bool mouseEnabled) => _mouseEnabled = mouseEnabled;
+    public VirtualPadManager(bool mouseEnabled)
+    {
+        _mouseEnabled = mouseEnabled;
+        _ = Task.Run(TypeLoopAsync);
+    }
+
+    /// <summary>Switches mouse and keyboard from the phone on or off. Turning off applies immediately.</summary>
+    public void SetRemoteInput(bool allowed)
+    {
+        lock (_sync)
+        {
+            if (!allowed)
+            {
+                ApplyMouse(0, 0, 0);
+                CancelTypingLocked();
+            }
+            _mouseEnabled = allowed;
+        }
+    }
+
+    public bool TypeText(string text, byte key)
+    {
+        lock (_sync)
+        {
+            if (!_mouseEnabled) return false;
+            _typing.Writer.TryWrite(new TypingJob(text, key, _typingGeneration));
+            return true;
+        }
+    }
+
+    private void CancelTypingLocked() => Interlocked.Increment(ref _typingGeneration);
+
+    private async Task TypeLoopAsync()
+    {
+        await foreach (var job in _typing.Reader.ReadAllAsync())
+        {
+            foreach (char c in job.Text)
+            {
+                if (Volatile.Read(ref _typingGeneration) != job.Generation) break;
+                if (char.IsControl(c)) continue;
+                SendKey(0, c, KeyUnicode);
+                await Task.Delay(KeyIntervalMs);
+            }
+
+            if (job.Key != Protocol.KeyNone && Volatile.Read(ref _typingGeneration) == job.Generation)
+            {
+                var (vk, scan) = job.Key switch
+                {
+                    Protocol.KeyBackspace => ((ushort)0x08, (ushort)0x0E),
+                    Protocol.KeyTab => ((ushort)0x09, (ushort)0x0F),
+                    Protocol.KeyEnter => ((ushort)0x0D, (ushort)0x1C),
+                    _ => ((ushort)0, (ushort)0),
+                };
+                if (vk != 0)
+                {
+                    SendKey(vk, scan, 0);
+                    await Task.Delay(KeyIntervalMs);
+                }
+            }
+        }
+    }
+
+    private static void SendKey(ushort vk, ushort scan, uint flags)
+    {
+        var inputs = new[]
+        {
+            new INPUT { type = InputKeyboard, u = new InputUnion { ki = new KEYBDINPUT { wVk = vk, wScan = scan, dwFlags = flags } } },
+            new INPUT { type = InputKeyboard, u = new InputUnion { ki = new KEYBDINPUT { wVk = vk, wScan = scan, dwFlags = flags | KeyUp } } },
+        };
+        SendInput(2, inputs, Marshal.SizeOf<INPUT>());
+    }
 
     /// <summary>Opens the driver. The controller itself only exists during a session.</summary>
     /// <exception cref="Nefarius.ViGEm.Client.Exceptions.VigemBusNotFoundException">Driver not installed.</exception>
@@ -76,6 +158,7 @@ public sealed class VirtualPadManager : IPadSink, IDisposable
         {
             if (!ReferenceEquals(_owner, owner)) return;
             _owner = null;
+            CancelTypingLocked(); // nothing left in the queue may be typed after the phone has gone
             DisconnectLocked();
         }
     }
@@ -155,7 +238,7 @@ public sealed class VirtualPadManager : IPadSink, IDisposable
         if (dx != 0 || dy != 0) flags |= MouseMove;
         if (flags == 0) return;
 
-        var input = new INPUT { type = InputMouse, mi = new MOUSEINPUT { dx = dx, dy = dy, dwFlags = flags } };
+        var input = new INPUT { type = InputMouse, u = new InputUnion { mi = new MOUSEINPUT { dx = dx, dy = dy, dwFlags = flags } } };
         SendInput(1, new[] { input }, Marshal.SizeOf<INPUT>());
     }
 
@@ -163,6 +246,8 @@ public sealed class VirtualPadManager : IPadSink, IDisposable
     {
         lock (_sync)
         {
+            CancelTypingLocked();
+            _typing.Writer.TryComplete();
             try { DisconnectLocked(); } catch { /* shutting down */ }
         }
         _client?.Dispose();
@@ -177,10 +262,25 @@ public sealed class VirtualPadManager : IPadSink, IDisposable
     }
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct KEYBDINPUT
+    {
+        public ushort wVk, wScan;
+        public uint dwFlags, time;
+        public nint dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    private struct InputUnion
+    {
+        [FieldOffset(0)] public MOUSEINPUT mi;
+        [FieldOffset(0)] public KEYBDINPUT ki;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct INPUT
     {
         public uint type;
-        public MOUSEINPUT mi;
+        public InputUnion u;
     }
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -192,4 +292,5 @@ public sealed class NullPadSink : IPadSink
 {
     public void ProcessInputPacket(ControllerStatePacket packet) { }
     public void Neutralize() { }
+    public bool TypeText(string text, byte key) => false;
 }

@@ -29,8 +29,9 @@ in the app. The stream can't exceed the monitor's refresh rate.
 To change the app icons, save the artwork as `Branding/icon.png`, run
 `python Branding/apply_icon.py`, and rebuild.
 
-The virtual controller exists only while the phone is connected. Mouse input from the phone is
-off unless you start the host with `--mouse`.
+The virtual controller exists only while the phone is connected. Mouse and keyboard input from
+the phone are off each time the host starts. Tick **Allow mouse and keyboard from phone** in the
+host window (or start it with `--mouse`) before the phone connects.
 
 Resolution, frame rate, bitrate, codec and sound are chosen in the app's Settings screen. The
 resolution, frame rate, bitrate and codec options below only apply if a client leaves them unset.
@@ -44,22 +45,56 @@ resolution, frame rate, bitrate and codec options below only apply if a client l
 | `--max-height <px>` | `1080` | Larger desktops are scaled down to this |
 | `--output <n>` | `0` | Monitor index |
 | `--no-pad`, `--no-audio` | off | Stream without the controller or sound |
-| `--mouse` | off | Allow touchpad mode. Run the host as administrator for games that run elevated |
+| `--mouse` | off | Start with mouse and keyboard from the phone allowed. Run the host as administrator for games that run elevated |
 
 ## Phone controls
 
 Settings > **Edit control layout** moves, resizes and hides controls. The joystick stays in one
 place by default; turn off "Lock joystick in place" to have it appear where you touch.
 
-Drag on any free area to move the camera. With `--mouse`, a **Pad**
-button switches the free area to a touchpad: drag moves the mouse, tap clicks, two-finger tap
-right-clicks.
+Drag on any free area to move the camera. Settings > **Camera sensitivity** goes up to 400%.
+
+With mouse and keyboard allowed, a **Pad** button switches the free area to a touchpad: drag moves
+the mouse, tap clicks, two-finger tap right-clicks. To type into a login form, use the touchpad to
+click the field, then tap **Kbd**, enter the text and press **Send**. **Tab**, **Enter** and
+**Delete** send those keys. Text is hidden unless you tick **Show**, and it is never saved.
 
 ## Security
 
 Pairing needs the PIN, one phone can connect at a time, and five wrong PINs lock that address
-out for 30 seconds. Traffic is not encrypted, so anyone on the same network can capture the
-video. Use this only on a network you trust and never forward port 9050 to the internet.
+out for 30 seconds. All traffic after the key exchange, including the PIN, controls, typed text,
+video and sound, is encrypted with AES-256-GCM using keys from a fresh P-256 exchange per
+connection.
+
+The PC keeps a permanent identity key in `%LOCALAPPDATA%\OmniDeck`, encrypted to your Windows
+account. The phone remembers it after the first successful pairing and refuses to connect if it
+changes, which blocks anyone impersonating the PC later. Do the first pairing on a network you
+trust, because nothing can verify the PC before then. If you reinstall Windows or lose that file,
+use Settings > **Forget saved PCs** on the phone. Never forward port 9050 to the internet.
+
+## Updates
+
+Both apps check GitHub Releases when they open. The PC app shows an **Update to x.y.z** button
+beside the window controls, and the phone app offers the update in a dialog. Both also have a
+manual **Check for updates** button. Update both together, because their versions need to match.
+
+The PC app only installs a download signed with the release key. Android only installs an APK
+signed with the same key as the installed app.
+
+## Publishing a release
+
+The release workflow needs three repository secrets, under Settings > Secrets and variables >
+Actions: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD` and `UPDATE_SIGNING_KEY`.
+
+To publish, push a version tag. The workflow tests both apps, builds them and creates the release:
+
+```powershell
+git tag v1.0.1
+git push origin v1.0.1
+```
+
+Keep a backup of the signing keys outside this repository. Without the Android key, future APKs
+can't update installed apps, and without the update key, the PC app won't accept new versions.
 
 ## Development
 
@@ -71,8 +106,9 @@ cd MobileClient; ..\.tools\gradle-8.9\bin\gradle testDebugUnitTest assembleDebug
 ```
 
 Host: `HostServer/` (C#, .NET 8). Client: `MobileClient/` (Kotlin). The wire format is defined in
-`HostServer/Network/Protocol.cs` and `MobileClient/.../net/Protocol.kt`. Both test suites assert the
-same golden bytes, so a layout mismatch fails a test.
+`HostServer/Network/Protocol.cs` and `MobileClient/.../net/Protocol.kt`, and encryption in
+`HostServer/Network/SecureTransport.cs` and `MobileClient/.../net/Crypto.kt`. Both test suites assert
+the same golden bytes, so a layout or key-derivation mismatch fails a test.
 
 Capture is FFmpeg's `ddagrab` (DXGI Desktop Duplication) feeding NVENC or AMF, with RTP over
 loopback so each frame's end is known immediately.
