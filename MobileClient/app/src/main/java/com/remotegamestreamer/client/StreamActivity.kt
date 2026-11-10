@@ -211,9 +211,9 @@ class StreamActivity : Activity() {
         fun addSlider(
             title: String,
             initial: Int,
-            onChange: (Int) -> Unit,
             min: Int = AppSettings.MIN_CAMERA_SENSITIVITY,
             upperBound: Int = AppSettings.MAX_CAMERA_SENSITIVITY,
+            onChange: (Int) -> Unit,
         ) {
             val label = TextView(this).apply { text = "$title: $initial%" }
             content.addView(label)
@@ -240,10 +240,10 @@ class StreamActivity : Activity() {
             settings.cameraSensitivityYPercent = it
             hud.setCameraSensitivity(settings.cameraSensitivityPercent, it)
         }
-        addSlider("Stream display size", settings.displayScalePercent, {
+        addSlider("Stream display size", settings.displayScalePercent, min = 50, upperBound = 100) {
             settings.displayScalePercent = it
             video.setDisplayScale(it)
-        }, min = 50, upperBound = 100)
+        }
 
         sensitivityDialog = AlertDialog.Builder(this)
             .setView(content)
