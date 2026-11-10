@@ -257,9 +257,9 @@ class HudLayoutTest {
     }
 
     @Test
-    fun everyXboxInputExceptGuideHasAControl() {
+    fun everyXboxInputHasAControl() {
         val bits = HudCatalog.controls.fold(0) { acc, c -> acc or c.bit }
-        assertEquals((1 shl 14) - 1, bits)
+        assertEquals((1 shl 15) - 1, bits)
         assertTrue(HudCatalog.controls.any { it.kind == ControlKind.LEFT_TRIGGER })
         assertTrue(HudCatalog.controls.any { it.kind == ControlKind.RIGHT_TRIGGER })
     }
