@@ -1,5 +1,6 @@
 package com.remotegamestreamer.client.input
 
+import kotlin.math.hypot
 import kotlin.math.sqrt
 
 /** Maps screen touches to signed XInput axis bounds. */
@@ -33,8 +34,58 @@ object InputNormalizer {
         out[1] = axis(-ny * scaled)
     }
 
-    /** Camera drag speed (dp per ms, screen direction) to one right-stick axis. */
-    fun camera(dpPerMs: Float, gain: Float = 0.75f): Short = axis(dpPerMs * gain)
-
     fun clampToShort(value: Int): Short = value.coerceIn(-32768, 32767).toShort()
+}
+
+/**
+ * Turns swipe distance into right-stick movement. A stick can't go past full deflection, so travel
+ * above that is kept and delivered by holding the stick a little longer, up to [maxPending] ms of
+ * full stick. Without this, higher sensitivity would stop having any effect on a normal swipe.
+ * Not thread-safe: the caller locks.
+ */
+class CameraMotion(private val smoothingMs: Float = 12f, private val maxPending: Float = 400f) {
+    private var pendingX = 0f
+    private var pendingY = 0f
+
+    /** Adds a swipe in dp, with Y already pointing up. Gains are stick deflection per dp/ms. */
+    fun add(dxDp: Float, dyDp: Float, gainX: Float, gainY: Float = gainX) {
+        pendingX += dxDp * gainX
+        pendingY += dyDp * gainY
+
+        val distance = hypot(pendingX, pendingY)
+        if (distance > maxPending) {
+            pendingX *= maxPending / distance
+            pendingY *= maxPending / distance
+        }
+    }
+
+    /** Writes the stick position for this moment into [out] (x, y) and uses up that much travel. */
+    fun step(elapsedMs: Float, out: ShortArray) {
+        var x = pendingX / smoothingMs
+        var y = pendingY / smoothingMs
+        val deflection = hypot(x, y)
+
+        if (deflection < STOP_BELOW) {
+            pendingX = 0f
+            pendingY = 0f
+            out[0] = 0
+            out[1] = 0
+            return
+        }
+
+        if (deflection > 1f) { // scale both axes together so the direction doesn't bend
+            x /= deflection
+            y /= deflection
+        }
+
+        val used = elapsedMs.coerceIn(0f, smoothingMs)
+        pendingX -= x * used
+        pendingY -= y * used
+        out[0] = InputNormalizer.axis(x)
+        out[1] = InputNormalizer.axis(y)
+    }
+
+    private companion object {
+        const val STOP_BELOW = 0.01f
+    }
 }

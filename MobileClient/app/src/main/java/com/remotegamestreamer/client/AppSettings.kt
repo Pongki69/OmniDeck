@@ -8,6 +8,11 @@ import com.remotegamestreamer.client.net.Protocol
 class AppSettings(context: Context) {
     private val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
+    init {
+        // There used to be one camera setting for both directions. Up/down starts from it.
+        if (!prefs.contains("cameraSensitivityY")) prefs.edit().putInt("cameraSensitivityY", cameraSensitivityPercent).apply()
+    }
+
     var maxHeight: Int
         get() = prefs.getInt("maxHeight", 1080)
         set(v) = prefs.edit().putInt("maxHeight", v).apply()
@@ -32,6 +37,10 @@ class AppSettings(context: Context) {
         get() = prefs.getInt("opacity", 50)
         set(v) = prefs.edit().putInt("opacity", v).apply()
 
+    var displayScalePercent: Int
+        get() = prefs.getInt("displayScale", 100)
+        set(v) = prefs.edit().putInt("displayScale", v.coerceIn(50, 100)).apply()
+
     var stickLocked: Boolean
         get() = prefs.getBoolean("stickLocked", true)
         set(v) = prefs.edit().putBoolean("stickLocked", v).apply()
@@ -39,6 +48,10 @@ class AppSettings(context: Context) {
     var cameraSensitivityPercent: Int
         get() = prefs.getInt("cameraSensitivity", 100)
         set(v) = prefs.edit().putInt("cameraSensitivity", v).apply()
+
+    var cameraSensitivityYPercent: Int
+        get() = prefs.getInt("cameraSensitivityY", 100)
+        set(v) = prefs.edit().putInt("cameraSensitivityY", v).apply()
 
     var layout: HudLayout
         get() = HudLayout.parse(prefs.getString("layout", null))

@@ -223,6 +223,7 @@ public sealed class VirtualPadManager : IPadSink, IDisposable
         c.SetButtonState(Xbox360Button.Down, (p.Buttons & (1 << 11)) != 0);
         c.SetButtonState(Xbox360Button.Left, (p.Buttons & (1 << 12)) != 0);
         c.SetButtonState(Xbox360Button.Right, (p.Buttons & (1 << 13)) != 0);
+        c.SetButtonState(Xbox360Button.Guide, (p.Buttons & (1 << 14)) != 0);
 
         c.SubmitReport();
     }

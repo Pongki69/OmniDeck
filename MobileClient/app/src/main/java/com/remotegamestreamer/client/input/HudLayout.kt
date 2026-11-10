@@ -1,6 +1,8 @@
 package com.remotegamestreamer.client.input
 
-enum class ControlKind { BIT, LEFT_TRIGGER, RIGHT_TRIGGER, TOUCHPAD_TOGGLE, KEYBOARD, CAMERA_SENSITIVITY, STICK }
+import java.util.Base64
+
+enum class ControlKind { BIT, LEFT_TRIGGER, RIGHT_TRIGGER, TOUCHPAD_TOGGLE, KEYBOARD, CAMERA_SENSITIVITY, STICK, GROUP_TOGGLE }
 
 class ControlSpec(
     val id: String,
@@ -35,13 +37,22 @@ object HudCatalog {
         bit("dup", "▲", ControllerState.DPAD_UP, 0.46f, 0.08f, 20f),
         bit("ddown", "▼", ControllerState.DPAD_DOWN, 0.54f, 0.08f, 20f),
         bit("dright", "▶", ControllerState.DPAD_RIGHT, 0.62f, 0.08f, 20f),
+        bit("guide", "Guide", ControllerState.GUIDE, 0.50f, 0.08f, 24f),
         ControlSpec("pad", "Pad", ControlKind.TOUCHPAD_TOGGLE, 0, 0.46f, 0.24f, 24f),
         ControlSpec("kbd", "Kbd", ControlKind.KEYBOARD, 0, 0.54f, 0.24f, 24f),
         ControlSpec("sens", "Sens", ControlKind.CAMERA_SENSITIVITY, 0, 0.62f, 0.24f, 24f),
+        ControlSpec("more", "More ▾", ControlKind.GROUP_TOGGLE, 0, 0.50f, 0.94f, 27f),
     )
 }
 
-class Placement(var fx: Float, var fy: Float, var scale: Float, var visible: Boolean)
+class Placement(
+    var fx: Float,
+    var fy: Float,
+    var scale: Float,
+    var visible: Boolean,
+    var imageUri: String? = null,
+    var inMore: Boolean = false,
+)
 
 /** The player's arrangement of the controls. Contains no Android types, so it can be unit tested. */
 class HudLayout {
@@ -61,8 +72,8 @@ class HudLayout {
         placement(id).apply { scale = (scale + delta).coerceIn(MIN_SCALE, MAX_SCALE) }
     }
 
-    /** The stick can't be hidden: without it there would be no way to move in-game. */
-    fun canHide(id: String) = specs.getValue(id).kind != ControlKind.STICK
+    /** Keep the stick and its More menu available so grouped controls remain reachable. */
+    fun canHide(id: String) = specs.getValue(id).kind != ControlKind.STICK && specs.getValue(id).kind != ControlKind.GROUP_TOGGLE
 
     fun toggleVisible(id: String) {
         if (canHide(id)) placement(id).apply { visible = !visible }
@@ -75,15 +86,32 @@ class HudLayout {
                 fy = s.defaultY
                 scale = 1f
                 visible = true
+                imageUri = null
+                inMore = false
+            }
+        }
+    }
+
+    fun applyPreset(preset: Int) {
+        reset()
+        when (preset) {
+            PRESET_COMPACT -> listOf("dleft", "dup", "ddown", "dright", "guide", "l3", "r3", "pad", "kbd", "sens").forEach { placement(it).visible = false }
+            PRESET_LEFT_HANDED -> for (control in HudCatalog.controls) {
+                val p = placement(control.id)
+                p.fx = 1f - p.fx
             }
         }
     }
 
     fun serialize(): String = placements.entries.joinToString(";") { (id, p) ->
-        "$id,${p.fx},${p.fy},${p.scale},${if (p.visible) 1 else 0}"
+        val image = p.imageUri?.let { Base64.getUrlEncoder().withoutPadding().encodeToString(it.toByteArray(Charsets.UTF_8)) }.orEmpty()
+        "$id,${p.fx},${p.fy},${p.scale},${if (p.visible) 1 else 0},$image,${if (p.inMore) 1 else 0}"
     }
 
     companion object {
+        const val PRESET_DEFAULT = 0
+        const val PRESET_COMPACT = 1
+        const val PRESET_LEFT_HANDED = 2
         const val MIN_SCALE = 0.5f
         const val MAX_SCALE = 2f
 
@@ -92,7 +120,7 @@ class HudLayout {
             val layout = HudLayout()
             for (entry in text.orEmpty().split(';')) {
                 val f = entry.split(',')
-                if (f.size != 5 || f[0] !in layout.placements) continue
+                if (f.size !in 5..7 || f[0] !in layout.placements) continue
                 val x = f[1].toFloatOrNull() ?: continue
                 val y = f[2].toFloatOrNull() ?: continue
                 val scale = f[3].toFloatOrNull() ?: continue
@@ -101,6 +129,12 @@ class HudLayout {
                 layout.move(f[0], x, y)
                 layout.placement(f[0]).scale = scale.coerceIn(MIN_SCALE, MAX_SCALE)
                 layout.placement(f[0]).visible = f[4] != "0" || !layout.canHide(f[0])
+                if (f.size >= 6 && f[5].isNotEmpty()) {
+                    layout.placement(f[0]).imageUri = runCatching {
+                        String(Base64.getUrlDecoder().decode(f[5]), Charsets.UTF_8)
+                    }.getOrNull()
+                }
+                if (f.size == 7) layout.placement(f[0]).inMore = f[6] == "1"
             }
             return layout
         }

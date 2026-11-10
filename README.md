@@ -33,6 +33,12 @@ The virtual controller exists only while the phone is connected. Mouse and keybo
 the phone are off each time the host starts. Tick **Allow mouse and keyboard from phone** in the
 host window (or start it with `--mouse`) before the phone connects.
 
+Physical Android controllers are forwarded as ordinary controller button and stick state to the
+same virtual Xbox 360 device. OmniDeck does not inspect or modify game processes, inject into a
+game, automate inputs, or add game-specific integrations. This design avoids those techniques,
+but each game's current terms and anti-cheat rules are controlled by its publisher and can change;
+no remote-input tool can guarantee a publisher will permit it.
+
 Resolution, frame rate, bitrate, codec and sound are chosen in the app's Settings screen. The
 resolution, frame rate, bitrate and codec options below only apply if a client leaves them unset.
 
@@ -51,10 +57,15 @@ resolution, frame rate, bitrate and codec options below only apply if a client l
 
 Settings > **Edit control layout** moves, resizes and hides controls. The joystick stays in one
 place by default; turn off "Lock joystick in place" to have it appear where you touch.
+Connected Android gamepads send their standard Xbox controls, including Guide, through the same
+virtual controller. In the layout editor, choose Full, Compact or Left-handed, hide individual
+controls, or move selected controls into the **More** dropdown. Choose an image to skin an on-screen
+control; control opacity remains adjustable in Settings. During a stream, **Sens** also adjusts
+the displayed video size from 50% to 100% without changing the PC capture resolution.
 
-Drag on any free area to move the camera. Tap **Sens** during a stream to change how sensitive the
-swipe is, up to 400%. It applies immediately and you can swipe to try it while the slider is open.
-The same setting is in Settings > **Camera sensitivity**.
+Drag on any free area to move the camera. Tap **Sens** during a stream to set left/right and up/down
+sensitivity separately, up to 400%. Changes apply immediately and you can swipe to try them while
+the sliders are open. The same settings are in the app's Settings screen.
 
 With mouse and keyboard allowed, a **Pad** button switches the free area to a touchpad: drag moves
 the mouse, tap clicks, two-finger tap right-clicks. To type into a login form, use the touchpad to

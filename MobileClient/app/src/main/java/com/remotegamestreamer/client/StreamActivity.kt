@@ -9,7 +9,11 @@ import android.os.Build
 import android.os.Bundle
 import android.text.InputFilter
 import android.text.InputType
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.Gravity
+import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
@@ -24,6 +28,7 @@ import com.remotegamestreamer.client.audio.AudioPlayer
 import com.remotegamestreamer.client.decoder.FrameReassembler
 import com.remotegamestreamer.client.decoder.VideoRenderSurface
 import com.remotegamestreamer.client.input.KeyboardSender
+import com.remotegamestreamer.client.input.PhysicalGamepadState
 import com.remotegamestreamer.client.input.TouchHudOverlay
 import com.remotegamestreamer.client.input.UdpInputSender
 import com.remotegamestreamer.client.net.Protocol
@@ -37,6 +42,7 @@ class StreamActivity : Activity() {
     private lateinit var settings: AppSettings
     private lateinit var video: VideoRenderSurface
     private lateinit var hud: TouchHudOverlay
+    private val physicalGamepad = PhysicalGamepadState()
 
     private var wifiLock: WifiManager.WifiLock? = null
     private var session: SessionClient? = null
@@ -58,7 +64,8 @@ class StreamActivity : Activity() {
 
         settings = AppSettings(this)
         video = VideoRenderSurface(this).apply { onDecoderError = { fail(it) } }
-        hud = TouchHudOverlay(this, settings.layout, settings.opacityPercent, settings.stickLocked, settings.cameraSensitivityPercent)
+        video.setDisplayScale(settings.displayScalePercent)
+        hud = TouchHudOverlay(this, settings.layout, settings.opacityPercent, settings.stickLocked, settings.cameraSensitivityPercent, settings.cameraSensitivityYPercent)
         hud.onKeyboardRequested = ::showKeyboardDialog
         hud.onCameraSensitivityRequested = ::showCameraSensitivityDialog
 
@@ -93,7 +100,10 @@ class StreamActivity : Activity() {
                 runOnUiThread { window.attributes = window.attributes.apply { preferredRefreshRate = welcome.fps.toFloat() } }
                 hud.post { hud.touchpadAvailable = welcome.mouseEnabled }
 
-                sender = UdpInputSender(client.control, welcome.token, client.keys.clientToHost, hud::sample).also { it.start() }
+                sender = UdpInputSender(client.control, welcome.token, client.keys.clientToHost) { state ->
+                    hud.sample(state)
+                    physicalGamepad.merge(state)
+                }.also { it.start() }
                 if (welcome.mouseEnabled) keyboard = KeyboardSender(client.control, welcome.token, client.keys, ::onKeyboardResult)
                 if (request.sound) audio = AudioPlayer(client.audio, client.host, welcome.sampleRate, client.keys.audio).also { it.start() }
                 videoThread = Thread({ receiveVideo(client) }, "VideoReceive").apply {
@@ -116,15 +126,26 @@ class StreamActivity : Activity() {
         val sender = keyboard ?: return
         if (keyboardDialog?.isShowing == true) return
 
-        val hiddenText = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-        val visibleText = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+        val hiddenText = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        val visibleText = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
         val field = EditText(this).apply {
-            hint = "Text to type on the PC"
+            hint = "Type or paste text for the focused PC window"
             inputType = hiddenText
             filters = arrayOf(InputFilter.LengthFilter(Protocol.MAX_KEYBOARD_CHARS))
             imeOptions = EditorInfo.IME_ACTION_SEND or EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
-            isSingleLine = true
+            minLines = 2
+            maxLines = 4
+            gravity = Gravity.TOP or Gravity.START
+            isSingleLine = false
         }
+        val count = TextView(this).apply { text = "0 / ${Protocol.MAX_KEYBOARD_CHARS}" }
+        field.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, countValue: Int) {
+                count.text = "${s?.length ?: 0} / ${Protocol.MAX_KEYBOARD_CHARS}"
+            }
+            override fun afterTextChanged(s: Editable?) = Unit
+        })
 
         fun sendTyped(key: Int) {
             val text = field.text.toString()
@@ -154,12 +175,14 @@ class StreamActivity : Activity() {
         addKey("Tab", Protocol.KEY_TAB)
         addKey("Enter", Protocol.KEY_ENTER)
         addKey("Delete", Protocol.KEY_BACKSPACE)
+        addKey("Clear", Protocol.KEY_NONE).also { row.getChildAt(row.childCount - 1).setOnClickListener { field.text.clear() } }
 
         val padding = (16 * resources.displayMetrics.density).toInt()
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(padding, padding / 2, padding, 0)
             addView(field)
+            addView(count)
             addView(row)
         }
 
@@ -179,31 +202,48 @@ class StreamActivity : Activity() {
     private fun showCameraSensitivityDialog() {
         if (sensitivityDialog?.isShowing == true) return
 
-        val min = AppSettings.MIN_CAMERA_SENSITIVITY
-        val label = TextView(this).apply { text = "Swipe sensitivity: ${settings.cameraSensitivityPercent}%" }
-        val slider = SeekBar(this).apply {
-            max = AppSettings.MAX_CAMERA_SENSITIVITY - min
-            progress = settings.cameraSensitivityPercent.coerceIn(min, AppSettings.MAX_CAMERA_SENSITIVITY) - min
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, value: Int, fromUser: Boolean) {
-                    if (!fromUser) return
-                    val percent = min + value
-                    label.text = "Swipe sensitivity: $percent%"
-                    hud.setCameraSensitivity(percent)
-                    settings.cameraSensitivityPercent = percent
-                }
-                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
-                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
-            })
-        }
-
         val padding = (16 * resources.displayMetrics.density).toInt()
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(padding, padding, padding, 0)
-            addView(label)
-            addView(slider)
         }
+
+        fun addSlider(
+            title: String,
+            initial: Int,
+            onChange: (Int) -> Unit,
+            min: Int = AppSettings.MIN_CAMERA_SENSITIVITY,
+            upperBound: Int = AppSettings.MAX_CAMERA_SENSITIVITY,
+        ) {
+            val label = TextView(this).apply { text = "$title: $initial%" }
+            content.addView(label)
+            content.addView(SeekBar(this).apply {
+                max = upperBound - min
+                progress = initial.coerceIn(min, upperBound) - min
+                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: SeekBar?, value: Int, fromUser: Boolean) {
+                        if (!fromUser) return
+                        label.text = "$title: ${min + value}%"
+                        onChange(min + value)
+                    }
+                    override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                    override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+                })
+            })
+        }
+
+        addSlider("Left / right", settings.cameraSensitivityPercent) {
+            settings.cameraSensitivityPercent = it
+            hud.setCameraSensitivity(it, settings.cameraSensitivityYPercent)
+        }
+        addSlider("Up / down", settings.cameraSensitivityYPercent) {
+            settings.cameraSensitivityYPercent = it
+            hud.setCameraSensitivity(settings.cameraSensitivityPercent, it)
+        }
+        addSlider("Stream display size", settings.displayScalePercent, {
+            settings.displayScalePercent = it
+            video.setDisplayScale(it)
+        }, min = 50, upperBound = 100)
 
         sensitivityDialog = AlertDialog.Builder(this)
             .setView(content)
@@ -264,6 +304,17 @@ class StreamActivity : Activity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) hideSystemBars()
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if ((event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP) &&
+            physicalGamepad.handleKey(event, event.action == KeyEvent.ACTION_DOWN)) return true
+        return super.dispatchKeyEvent(event)
+    }
+
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if (physicalGamepad.handleMotion(event)) return true
+        return super.onGenericMotionEvent(event)
     }
 
     override fun onStop() {

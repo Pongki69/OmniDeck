@@ -52,11 +52,13 @@ class SettingsActivity : Activity() {
             settings.hevc = false
         }
         toggle("Sound", settings.sound) { settings.sound = it }
+        slider("Stream display size", 50, 100, settings.displayScalePercent, { "$it%" }) { settings.displayScalePercent = it }
 
         heading("Controls")
         toggle("Lock joystick in place (off: it appears where you touch)", settings.stickLocked) { settings.stickLocked = it }
         slider("Control opacity", 10, 100, settings.opacityPercent, { "$it%" }) { settings.opacityPercent = it }
-        slider("Camera sensitivity", AppSettings.MIN_CAMERA_SENSITIVITY, AppSettings.MAX_CAMERA_SENSITIVITY, settings.cameraSensitivityPercent, { "$it%" }) { settings.cameraSensitivityPercent = it }
+        slider("Camera left/right sensitivity", AppSettings.MIN_CAMERA_SENSITIVITY, AppSettings.MAX_CAMERA_SENSITIVITY, settings.cameraSensitivityPercent, { "$it%" }) { settings.cameraSensitivityPercent = it }
+        slider("Camera up/down sensitivity", AppSettings.MIN_CAMERA_SENSITIVITY, AppSettings.MAX_CAMERA_SENSITIVITY, settings.cameraSensitivityYPercent, { "$it%" }) { settings.cameraSensitivityYPercent = it }
         column.addView(
             Button(this).apply {
                 text = "Edit control layout"

@@ -3,12 +3,18 @@ package com.remotegamestreamer.client.input
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
 import android.os.SystemClock
+import android.net.Uri
 import android.view.MotionEvent
 import android.view.View
 import kotlin.math.abs
 import kotlin.math.hypot
+import java.util.HashMap
 
 /**
  * Translucent HUD built from [HudLayout]. In play it produces controller state. In
@@ -19,7 +25,8 @@ class TouchHudOverlay(
     private val layout: HudLayout,
     opacityPercent: Int,
     private val stickLocked: Boolean,
-    cameraSensitivityPercent: Int,
+    cameraSensitivityXPercent: Int,
+    cameraSensitivityYPercent: Int,
     private val editMode: Boolean = false,
 ) : View(context) {
 
@@ -35,7 +42,6 @@ class TouchHudOverlay(
     private class Track(val target: Target, val button: Control?, val downX: Float, val downY: Float, val downTime: Long) {
         var lastX = downX
         var lastY = downY
-        var lastTime = downTime
         var moved = false
     }
 
@@ -45,7 +51,8 @@ class TouchHudOverlay(
     private val buttons = controls.filter { it !== stick }
 
     private val alphaScale = opacityPercent / 50f
-    private var cameraGain = BASE_CAMERA_GAIN * cameraSensitivityPercent / 100f
+    private var cameraGainX = BASE_CAMERA_GAIN * cameraSensitivityXPercent / 100f
+    private var cameraGainY = BASE_CAMERA_GAIN * cameraSensitivityYPercent / 100f
 
     private val tracks = HashMap<Int, Track>()
     private val stickOut = ShortArray(2)
@@ -57,6 +64,7 @@ class TouchHudOverlay(
     private var stickActive = false
 
     private var touchpadMode = false
+    private var moreExpanded = false
     private var padPeakPointers = 0
     private var padDragged = false
 
@@ -66,6 +74,7 @@ class TouchHudOverlay(
 
     /** Editor only: told the selected control's id, or null when nothing is selected. */
     var onSelectionChanged: ((String?) -> Unit)? = null
+    val selectedControlId: String? get() = selected?.spec?.id
 
     /** Called when the player lifts their finger off the Kbd button. */
     var onKeyboardRequested: (() -> Unit)? = null
@@ -74,8 +83,9 @@ class TouchHudOverlay(
     var onCameraSensitivityRequested: (() -> Unit)? = null
 
     /** Applies to the next camera movement. Call on the UI thread. */
-    fun setCameraSensitivity(percent: Int) {
-        cameraGain = BASE_CAMERA_GAIN * percent / 100f
+    fun setCameraSensitivity(xPercent: Int, yPercent: Int) {
+        cameraGainX = BASE_CAMERA_GAIN * xPercent / 100f
+        cameraGainY = BASE_CAMERA_GAIN * yPercent / 100f
     }
 
     /** Set from the host's Welcome. Without it the Pad and Kbd buttons are hidden, because the host would ignore them. */
@@ -92,9 +102,9 @@ class TouchHudOverlay(
     private var rightTrigger = 0
     private var thumbLX: Short = 0
     private var thumbLY: Short = 0
-    private var thumbRX: Short = 0
-    private var thumbRY: Short = 0
-    private var lastCameraMove = 0L
+    private val cameraMotion = CameraMotion()
+    private val cameraOut = ShortArray(2)
+    private var lastSampleNanos = 0L
     private var mouseX = 0f
     private var mouseY = 0f
     private var leftClickUntil = 0L
@@ -116,6 +126,10 @@ class TouchHudOverlay(
         textAlign = Paint.Align.CENTER
         textSize = 14f * density
     }
+    private val customImages = HashMap<String, Bitmap?>()
+    private val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val imageBounds = RectF()
+    private val imageClip = Path()
 
     private fun alpha(base: Int) = (base * alphaScale).toInt().coerceIn(0, 255)
 
@@ -123,18 +137,17 @@ class TouchHudOverlay(
     fun sample(out: ControllerState) {
         val now = SystemClock.uptimeMillis()
         synchronized(this) {
-            if (now - lastCameraMove > CAMERA_IDLE_MS) {
-                thumbRX = 0
-                thumbRY = 0
-            }
+            val nanos = System.nanoTime()
+            cameraMotion.step((nanos - lastSampleNanos) / 1_000_000f, cameraOut)
+            lastSampleNanos = nanos
 
             out.buttons = buttonsMask
             out.leftTrigger = leftTrigger
             out.rightTrigger = rightTrigger
             out.thumbLX = thumbLX
             out.thumbLY = thumbLY
-            out.thumbRX = thumbRX
-            out.thumbRY = thumbRY
+            out.thumbRX = cameraOut[0]
+            out.thumbRY = cameraOut[1]
 
             val dx = mouseX.toInt()
             val dy = mouseY.toInt()
@@ -162,8 +175,11 @@ class TouchHudOverlay(
         c.radius = c.spec.radiusDp * c.place.scale * density
     }
 
-    private fun isShown(c: Control) =
-        editMode || touchpadAvailable || (c.spec.kind != ControlKind.TOUCHPAD_TOGGLE && c.spec.kind != ControlKind.KEYBOARD)
+    private fun isShown(c: Control) = editMode || when {
+        c.spec.kind == ControlKind.GROUP_TOGGLE -> true
+        c.place.inMore -> moreExpanded && (touchpadAvailable || (c.spec.kind != ControlKind.TOUCHPAD_TOGGLE && c.spec.kind != ControlKind.KEYBOARD))
+        else -> touchpadAvailable || (c.spec.kind != ControlKind.TOUCHPAD_TOGGLE && c.spec.kind != ControlKind.KEYBOARD)
+    }
 
     private fun isUsable(c: Control) = isShown(c) && c.place.visible
 
@@ -173,6 +189,9 @@ class TouchHudOverlay(
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (editMode) return onEditTouch(e)
+
+        // Otherwise Android holds touches back until the next screen refresh.
+        if (e.actionMasked == MotionEvent.ACTION_DOWN) requestUnbufferedDispatch(e)
 
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> pointerDown(e, e.actionIndex)
@@ -242,15 +261,10 @@ class TouchHudOverlay(
             Target.STICK -> updateStick(x, y)
 
             Target.CAMERA -> {
-                val dt = (e.eventTime - track.lastTime).coerceAtLeast(1L).toFloat()
                 val dx = (x - track.lastX) / density
                 val dy = (y - track.lastY) / density
                 if (dx != 0f || dy != 0f) {
-                    synchronized(this) {
-                        thumbRX = InputNormalizer.camera(dx / dt, cameraGain)
-                        thumbRY = InputNormalizer.camera(-dy / dt, cameraGain)
-                        lastCameraMove = e.eventTime
-                    }
+                    synchronized(this) { cameraMotion.add(dx, -dy, cameraGainX, cameraGainY) }
                 }
             }
 
@@ -274,7 +288,6 @@ class TouchHudOverlay(
 
         track.lastX = x
         track.lastY = y
-        track.lastTime = e.eventTime
     }
 
     private fun pointerUp(id: Int, eventTime: Long, cancelled: Boolean) {
@@ -316,6 +329,7 @@ class TouchHudOverlay(
     private fun press(b: Control) {
         b.pressCount++
         when (b.spec.kind) {
+            ControlKind.GROUP_TOGGLE -> { moreExpanded = !moreExpanded; invalidate() }
             ControlKind.TOUCHPAD_TOGGLE -> touchpadMode = !touchpadMode
             ControlKind.LEFT_TRIGGER -> synchronized(this) { leftTrigger = 255 }
             ControlKind.RIGHT_TRIGGER -> synchronized(this) { rightTrigger = 255 }
@@ -328,6 +342,7 @@ class TouchHudOverlay(
         b.pressCount--
         if (b.pressCount > 0) return
         when (b.spec.kind) {
+            ControlKind.GROUP_TOGGLE -> Unit
             ControlKind.LEFT_TRIGGER -> synchronized(this) { leftTrigger = 0 }
             ControlKind.RIGHT_TRIGGER -> synchronized(this) { rightTrigger = 0 }
             ControlKind.BIT -> synchronized(this) { buttonsMask = buttonsMask and b.spec.bit.inv() }
@@ -383,6 +398,29 @@ class TouchHudOverlay(
         invalidate()
     }
 
+    fun setSelectedImage(uri: String?) {
+        val control = selected ?: return
+        if (control.spec.kind == ControlKind.STICK) return
+        control.place.imageUri = uri
+        invalidate()
+    }
+
+    fun toggleSelectedGroup() {
+        val control = selected ?: return
+        if (control.spec.id == "more" || control.spec.kind == ControlKind.STICK) return
+        control.place.inMore = !control.place.inMore
+        placeControls()
+        invalidate()
+    }
+
+    fun applyPreset(preset: Int) {
+        layout.applyPreset(preset)
+        selected = null
+        placeControls()
+        onSelectionChanged?.invoke(null)
+        invalidate()
+    }
+
     override fun onDraw(canvas: Canvas) {
         for (b in buttons) {
             if (!isShown(b) || (!editMode && !b.place.visible)) continue
@@ -392,8 +430,20 @@ class TouchHudOverlay(
             val hiddenInEditor = !b.place.visible
             if (hiddenInEditor) fill.color = Color.argb(20, 255, 80, 80)
             canvas.drawCircle(b.cx, b.cy, b.radius, fill)
+            val image = b.place.imageUri?.let(::loadCustomImage)
+            if (image != null) {
+                imageBounds.set(b.cx - b.radius, b.cy - b.radius, b.cx + b.radius, b.cy + b.radius)
+                imageClip.reset()
+                imageClip.addCircle(b.cx, b.cy, b.radius, Path.Direction.CW)
+                val checkpoint = canvas.save()
+                canvas.clipPath(imageClip)
+                imagePaint.alpha = alpha(255)
+                canvas.drawBitmap(image, null, imageBounds, imagePaint)
+                canvas.restoreToCount(checkpoint)
+            }
             canvas.drawCircle(b.cx, b.cy, b.radius, if (b === selected) selectionRing else ring)
-            canvas.drawText(b.spec.label, b.cx, b.cy - (text.ascent() + text.descent()) / 2f, text)
+            val label = if (b.spec.kind == ControlKind.GROUP_TOGGLE && moreExpanded) "More ▴" else b.spec.label
+            canvas.drawText(label, b.cx, b.cy - (text.ascent() + text.descent()) / 2f, text)
         }
 
         if (touchpadMode) {
@@ -422,16 +472,31 @@ class TouchHudOverlay(
         canvas.drawCircle(cx + kx, cy + ky, stick.radius * 0.42f, fill)
     }
 
+    private fun loadCustomImage(uriText: String): Bitmap? {
+        if (customImages.containsKey(uriText)) return customImages[uriText]
+        val bitmap = runCatching {
+            val uri = Uri.parse(uriText)
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+            val largest = maxOf(bounds.outWidth, bounds.outHeight)
+            val sample = if (largest > MAX_CUSTOM_IMAGE_EDGE) (largest / MAX_CUSTOM_IMAGE_EDGE).coerceAtLeast(1) else 1
+            val options = BitmapFactory.Options().apply { inSampleSize = sample }
+            context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+        }.getOrNull()
+        customImages[uriText] = bitmap
+        return bitmap
+    }
+
     private companion object {
         const val STICK_ZONE = 0.45f
         const val STICK_GRAB = 1.25f
         const val HIT_SLOP = 1.15f
         const val MIN_EDIT_GRAB_DP = 28f
         const val BASE_CAMERA_GAIN = 0.75f
-        const val CAMERA_IDLE_MS = 40L
         const val TAP_SLOP_DP = 10f
         const val TAP_MAX_MS = 250L
         const val CLICK_HOLD_MS = 40L
         const val MOUSE_SENSITIVITY = 1.8f
+        const val MAX_CUSTOM_IMAGE_EDGE = 512
     }
 }

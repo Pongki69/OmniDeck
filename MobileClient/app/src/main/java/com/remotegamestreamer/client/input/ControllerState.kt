@@ -30,6 +30,7 @@ class ControllerState {
         const val DPAD_DOWN = 1 shl 11
         const val DPAD_LEFT = 1 shl 12
         const val DPAD_RIGHT = 1 shl 13
+        const val GUIDE = 1 shl 14
 
         const val MOUSE_LEFT = 1
         const val MOUSE_RIGHT = 2

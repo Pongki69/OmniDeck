@@ -4,6 +4,7 @@ import com.remotegamestreamer.client.decoder.FrameReassembler
 import com.remotegamestreamer.client.input.ControlKind
 import com.remotegamestreamer.client.input.ControllerState
 import com.remotegamestreamer.client.input.HudCatalog
+import com.remotegamestreamer.client.input.CameraMotion
 import com.remotegamestreamer.client.input.HudLayout
 import com.remotegamestreamer.client.input.InputNormalizer
 import com.remotegamestreamer.client.net.Crypto
@@ -315,6 +316,85 @@ class HudLayoutTest {
     }
 }
 
+class CameraMotionTest {
+    private val out = ShortArray(2)
+
+    /** Runs until the stick returns to center and returns total travel in ms of full stick. */
+    private fun CameraMotion.drain(): Float {
+        var travel = 0f
+        repeat(2000) {
+            step(5f, out)
+            travel += out[0] / 32767f * 5f
+        }
+        return travel
+    }
+
+    private fun swipe(gain: Float, dp: Float): Float = CameraMotion().run {
+        add(dp, 0f, gain)
+        drain()
+    }
+
+    @Test
+    fun higherSensitivityGivesMoreTravelForAFastSwipe() {
+        val at100 = swipe(0.75f, 200f)
+        val at400 = swipe(3f, 200f)
+        assertEquals(150f, at100, 8f)
+        assertEquals(400f, at400, 8f)
+    }
+
+    @Test
+    fun stickNeverLeavesItsRangeAndKeepsItsDirection() {
+        val motion = CameraMotion()
+        motion.add(3000f, 4000f, 3f)
+        motion.step(5f, out)
+        assertEquals(0.6f, out[0] / 32767f, 0.01f)
+        assertEquals(0.8f, out[1] / 32767f, 0.01f)
+    }
+
+    @Test
+    fun coastingAfterTheFingerStopsIsLimited() {
+        val motion = CameraMotion(maxPending = 400f)
+        motion.add(100000f, 0f, 3f)
+        repeat(110) { motion.step(5f, out) } // 400 ms at full stick, then a short ease back to center
+        assertEquals(0.toShort(), out[0])
+    }
+
+    @Test
+    fun reversingCancelsWhatIsStillPending() {
+        val motion = CameraMotion()
+        motion.add(100f, 0f, 3f)
+        motion.add(-100f, 0f, 3f)
+        motion.step(5f, out)
+        assertEquals(0.toShort(), out[0])
+    }
+
+    @Test
+    fun aLongStallCannotOvershootBackwards() {
+        val motion = CameraMotion()
+        motion.add(1f, 0f, 1f)
+        motion.step(5000f, out)
+        motion.step(5f, out)
+        assertEquals(0.toShort(), out[0])
+    }
+
+    @Test
+    fun aSmallSwipeStaysSmoothAndStillArrives() {
+        val motion = CameraMotion()
+        motion.add(10f, 0f, 0.75f) // 7.5 ms of full stick
+        motion.step(5f, out)
+        assertTrue(out[0] / 32767f < 0.7f)
+        assertEquals(7.5f - out[0] / 32767f * 5f, motion.drain(), 0.6f)
+    }
+
+    @Test
+    fun horizontalAndVerticalSensitivityAreIndependent() {
+        val motion = CameraMotion()
+        motion.add(1f, 1f, gainX = 2f, gainY = 0.5f)
+        motion.step(5f, out)
+        assertEquals(4f, out[0].toFloat() / out[1], 0.01f)
+    }
+}
+
 class InputNormalizerTest {
     @Test
     fun axisCoversFullRange() {
@@ -322,13 +402,6 @@ class InputNormalizerTest {
         assertEquals((-32768).toShort(), InputNormalizer.axis(-1f))
         assertEquals(32767.toShort(), InputNormalizer.axis(5f))
         assertEquals(0.toShort(), InputNormalizer.axis(0f))
-    }
-
-    @Test
-    fun highCameraSensitivityStaysInsideTheStickRange() {
-        val highestGain = 0.75f * 4f
-        assertEquals(32767.toShort(), InputNormalizer.camera(50f, highestGain))
-        assertEquals((-32768).toShort(), InputNormalizer.camera(-50f, highestGain))
     }
 
     @Test

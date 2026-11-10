@@ -22,6 +22,7 @@ class VideoRenderSurface(context: Context) : SurfaceView(context), SurfaceHolder
     private var streamWidth = 0
     private var streamHeight = 0
     private var streamFps = 60
+    private var displayScale = 1f
     private var presentationUs = 0L
 
     init {
@@ -40,9 +41,15 @@ class VideoRenderSurface(context: Context) : SurfaceView(context), SurfaceHolder
         post { requestLayout() }
     }
 
+    /** Scales the letterboxed stream within the phone display without changing stream resolution. */
+    fun setDisplayScale(percent: Int) {
+        displayScale = percent.coerceIn(50, 100) / 100f
+        requestLayout()
+    }
+
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        val availableW = MeasureSpec.getSize(widthMeasureSpec)
-        val availableH = MeasureSpec.getSize(heightMeasureSpec)
+        val availableW = (MeasureSpec.getSize(widthMeasureSpec) * displayScale).toInt()
+        val availableH = (MeasureSpec.getSize(heightMeasureSpec) * displayScale).toInt()
         if (streamWidth == 0 || streamHeight == 0 || availableW == 0 || availableH == 0) {
             setMeasuredDimension(availableW, availableH)
             return
