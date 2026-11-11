@@ -290,11 +290,11 @@ class HudLayoutTest {
     }
 
     @Test
-    fun stickCannotBeHiddenEvenFromSavedData() {
+    fun stickCanBeHiddenAndRestoredFromSavedData() {
         val l = HudLayout()
         l.toggleVisible("stick")
-        assertTrue(l.placement("stick").visible)
-        assertTrue(HudLayout.parse("stick,0.5,0.5,1.0,0").placement("stick").visible)
+        assertFalse(l.placement("stick").visible)
+        assertFalse(HudLayout.parse("stick,0.5,0.5,1.0,0").placement("stick").visible)
     }
 
     @Test
