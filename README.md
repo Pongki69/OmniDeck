@@ -55,13 +55,20 @@ resolution, frame rate, bitrate and codec options below only apply if a client l
 
 ## Phone controls
 
-Settings > **Edit control layout** moves, resizes and hides controls. The joystick stays in one
-place by default; turn off "Lock joystick in place" to have it appear where you touch.
-Connected Android gamepads send their standard Xbox controls, including Guide, through the same
-virtual controller. In the layout editor, choose Full, Compact or Left-handed, hide individual
-controls, or move selected controls into the **More** dropdown. Choose an image to skin an on-screen
-control; control opacity remains adjustable in Settings. During a stream, **Sens** also adjusts
-the displayed video size from 50% to 100% without changing the PC capture resolution.
+Settings > **Edit control layout** moves, resizes and hides controls. The controller workspace maps
+inputs from the physical controller, while Game screen lets you resize the stream preview and place
+touch controls over the full screen. Connected Android gamepads send their standard Xbox controls,
+including Guide, through the same virtual controller.
+
+In the layout editor, choose Full, Compact or Left-handed, hide individual controls, and customize
+their text, shape, color, opacity or uploaded artwork. Under Actions, **Add controls to** defaults to
+**None · Main HUD**. Create a drawer folder when you want one, then choose it explicitly to move
+controls into it. Deleting a folder returns its controls to the main HUD.
+
+The right camera can use the on-screen right joystick or **Touch drag**. Touch drag hides that
+joystick and translates physical right-stick movement into relative camera motion; press physical
+R3 to pause or resume that camera input. During a stream, **Sens** also adjusts the displayed video
+size from 50% to 100% without changing the PC capture resolution.
 
 Drag on any free area to move the camera. Tap **Sens** during a stream to set left/right and up/down
 sensitivity separately, up to 400%. Changes apply immediately and you can swipe to try them while

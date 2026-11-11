@@ -23,6 +23,7 @@ class VideoRenderSurface(context: Context) : SurfaceView(context), SurfaceHolder
     private var streamHeight = 0
     private var streamFps = 60
     private var displayScale = 1f
+    private var stretchToFill = false
     private var presentationUs = 0L
 
     init {
@@ -47,9 +48,18 @@ class VideoRenderSurface(context: Context) : SurfaceView(context), SurfaceHolder
         requestLayout()
     }
 
+    fun setStretchToFill(enabled: Boolean) {
+        stretchToFill = enabled
+        requestLayout()
+    }
+
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val availableW = (MeasureSpec.getSize(widthMeasureSpec) * displayScale).toInt()
         val availableH = (MeasureSpec.getSize(heightMeasureSpec) * displayScale).toInt()
+        if (stretchToFill) {
+            setMeasuredDimension(availableW, availableH)
+            return
+        }
         if (streamWidth == 0 || streamHeight == 0 || availableW == 0 || availableH == 0) {
             setMeasuredDimension(availableW, availableH)
             return

@@ -51,12 +51,12 @@ class PhysicalGamepadState {
         return true
     }
 
-    fun merge(out: ControllerState) = synchronized(lock) {
+    fun merge(out: ControllerState, includeRightStick: Boolean = true) = synchronized(lock) {
         out.buttons = out.buttons or buttons
         if (abs(lx) > 0f) out.thumbLX = InputNormalizer.axis(lx)
         if (abs(ly) > 0f) out.thumbLY = InputNormalizer.axis(-ly)
-        if (abs(rx) > 0f) out.thumbRX = InputNormalizer.axis(rx)
-        if (abs(ry) > 0f) out.thumbRY = InputNormalizer.axis(-ry)
+        if (includeRightStick && abs(rx) > 0f) out.thumbRX = InputNormalizer.axis(rx)
+        if (includeRightStick && abs(ry) > 0f) out.thumbRY = InputNormalizer.axis(-ry)
         out.leftTrigger = maxOf(out.leftTrigger, (lt * 255).toInt())
         out.rightTrigger = maxOf(out.rightTrigger, (rt * 255).toInt())
         if (hatX < -0.5f) out.buttons = out.buttons or ControllerState.DPAD_LEFT
@@ -64,6 +64,10 @@ class PhysicalGamepadState {
         if (hatY < -0.5f) out.buttons = out.buttons or ControllerState.DPAD_UP
         if (hatY > 0.5f) out.buttons = out.buttons or ControllerState.DPAD_DOWN
     }
+
+    fun rightStickAxes(): Pair<Float, Float> = synchronized(lock) { rx to -ry }
+
+    fun isRightStickClickPressed(): Boolean = synchronized(lock) { (buttons and ControllerState.R3) != 0 }
 
     private fun isGamepad(source: Int) =
         (source and InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||

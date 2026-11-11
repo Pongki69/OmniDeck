@@ -47,11 +47,27 @@ class CameraMotion(private val smoothingMs: Float = 12f, private val maxPending:
     private var pendingX = 0f
     private var pendingY = 0f
 
+    fun clear() {
+        pendingX = 0f
+        pendingY = 0f
+    }
+
     /** Adds a swipe in dp, with Y already pointing up. Gains are stick deflection per dp/ms. */
     fun add(dxDp: Float, dyDp: Float, gainX: Float, gainY: Float = gainX) {
         pendingX += dxDp * gainX
         pendingY += dyDp * gainY
+        clampPending()
+    }
 
+    /** Converts continuous stick deflection into relative motion for the sample interval. */
+    fun addDeflection(x: Float, y: Float, elapsedMs: Float) {
+        val elapsed = elapsedMs.coerceIn(0f, 12f)
+        pendingX += x.coerceIn(-1f, 1f) * elapsed
+        pendingY += y.coerceIn(-1f, 1f) * elapsed
+        clampPending()
+    }
+
+    private fun clampPending() {
         val distance = hypot(pendingX, pendingY)
         if (distance > maxPending) {
             pendingX *= maxPending / distance

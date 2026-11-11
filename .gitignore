@@ -4,6 +4,7 @@ bin/
 obj/
 build/
 .gradle/
+**/.kotlin/
 local.properties
 *.apk
 *.jks

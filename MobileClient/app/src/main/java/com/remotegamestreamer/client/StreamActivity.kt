@@ -14,6 +14,7 @@ import android.text.TextWatcher
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.View
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
@@ -28,6 +29,7 @@ import com.remotegamestreamer.client.audio.AudioPlayer
 import com.remotegamestreamer.client.decoder.FrameReassembler
 import com.remotegamestreamer.client.decoder.VideoRenderSurface
 import com.remotegamestreamer.client.input.KeyboardSender
+import com.remotegamestreamer.client.input.HudLayout
 import com.remotegamestreamer.client.input.PhysicalGamepadState
 import com.remotegamestreamer.client.input.TouchHudOverlay
 import com.remotegamestreamer.client.input.UdpInputSender
@@ -42,6 +44,9 @@ class StreamActivity : Activity() {
     private lateinit var settings: AppSettings
     private lateinit var video: VideoRenderSurface
     private lateinit var hud: TouchHudOverlay
+    private lateinit var layoutModel: HudLayout
+    private lateinit var streamRoot: FrameLayout
+    private var liveLayoutTools: View? = null
     private val physicalGamepad = PhysicalGamepadState()
 
     private var wifiLock: WifiManager.WifiLock? = null
@@ -53,6 +58,7 @@ class StreamActivity : Activity() {
     private var audio: AudioPlayer? = null
     private var videoThread: Thread? = null
     @Volatile private var closing = false
+    private var physicalR3WasDown = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -65,17 +71,23 @@ class StreamActivity : Activity() {
         settings = AppSettings(this)
         video = VideoRenderSurface(this).apply { onDecoderError = { fail(it) } }
         video.setDisplayScale(settings.displayScalePercent)
-        hud = TouchHudOverlay(this, settings.layout, settings.opacityPercent, settings.stickLocked, settings.cameraSensitivityPercent, settings.cameraSensitivityYPercent)
+        video.setStretchToFill(settings.stretchToFill)
+        layoutModel = settings.layout
+        hud = TouchHudOverlay(this, layoutModel, settings.stickLocked, settings.cameraSensitivityPercent, settings.cameraSensitivityYPercent)
+        hud.setTouchDragCameraEnabled(settings.touchDragCamera)
+        hud.onCameraActiveChanged = { active ->
+            runOnUiThread { Toast.makeText(this, if (active) "Camera control on" else "Camera control paused", Toast.LENGTH_SHORT).show() }
+        }
         hud.onKeyboardRequested = ::showKeyboardDialog
         hud.onCameraSensitivityRequested = ::showCameraSensitivityDialog
+        hud.onLayoutEditRequested = ::showLiveLayoutEditor
 
-        setContentView(
-            FrameLayout(this).apply {
-                setBackgroundColor(Color.BLACK)
-                addView(video, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.CENTER))
-                addView(hud, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
-            },
-        )
+        streamRoot = FrameLayout(this).apply {
+            setBackgroundColor(Color.BLACK)
+            addView(video, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.CENTER))
+            addView(hud, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+        }
+        setContentView(streamRoot)
         hideSystemBars()
         acquireWifiLock()
 
@@ -98,11 +110,23 @@ class StreamActivity : Activity() {
                 session = client
                 video.configure(welcome.isHevc, welcome.width, welcome.height, welcome.fps)
                 runOnUiThread { window.attributes = window.attributes.apply { preferredRefreshRate = welcome.fps.toFloat() } }
-                hud.post { hud.touchpadAvailable = welcome.mouseEnabled }
+                hud.post {
+                    hud.touchpadAvailable = welcome.mouseEnabled
+                    hud.setStreamConnected(true)
+                }
 
                 sender = UdpInputSender(client.control, welcome.token, client.keys.clientToHost) { state ->
+                    if (settings.touchDragCamera) {
+                        val r3Down = physicalGamepad.isRightStickClickPressed()
+                        if (r3Down && !physicalR3WasDown) hud.toggleCameraActive()
+                        physicalR3WasDown = r3Down
+                        val (rightX, rightY) = physicalGamepad.rightStickAxes()
+                        hud.addPhysicalStickCamera(rightX, rightY)
+                    } else {
+                        physicalR3WasDown = false
+                    }
                     hud.sample(state)
-                    physicalGamepad.merge(state)
+                    physicalGamepad.merge(state, includeRightStick = !settings.touchDragCamera)
                 }.also { it.start() }
                 if (welcome.mouseEnabled) keyboard = KeyboardSender(client.control, welcome.token, client.keys, ::onKeyboardResult)
                 if (request.sound) audio = AudioPlayer(client.audio, client.host, welcome.sampleRate, client.keys.audio).also { it.start() }
@@ -169,6 +193,7 @@ class StreamActivity : Activity() {
         })
         fun addKey(label: String, key: Int) = row.addView(Button(this).apply {
             text = label
+            AppUi.styleButton(this)
             setOnClickListener { sendTyped(key) }
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         addKey("Send", Protocol.KEY_NONE)
@@ -220,6 +245,7 @@ class StreamActivity : Activity() {
             content.addView(SeekBar(this).apply {
                 max = upperBound - min
                 progress = initial.coerceIn(min, upperBound) - min
+                AppUi.styleSlider(this)
                 setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                     override fun onProgressChanged(seekBar: SeekBar?, value: Int, fromUser: Boolean) {
                         if (!fromUser) return
@@ -245,6 +271,15 @@ class StreamActivity : Activity() {
             video.setDisplayScale(it)
         }
 
+        content.addView(Button(this).apply {
+            text = "Edit layout over game"
+            AppUi.styleButton(this, primary = true)
+            setOnClickListener {
+                sensitivityDialog?.dismiss()
+                showLiveLayoutEditor()
+            }
+        })
+
         sensitivityDialog = AlertDialog.Builder(this)
             .setView(content)
             .setPositiveButton("Done", null)
@@ -257,6 +292,79 @@ class StreamActivity : Activity() {
                 show()
             }
     }
+
+    /** Edit the HUD over the real stream so control placement and the video bounds can be judged together. */
+    private fun showLiveLayoutEditor() {
+        if (liveLayoutTools != null || isFinishing) return
+        hud.setEditMode(true)
+
+        val title = TextView(this).apply {
+            text = "Game view size"
+            textSize = 13f
+            setTextColor(AppUi.textPrimary)
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(10), 0, dp(6), 0)
+        }
+        val value = TextView(this).apply {
+            text = "${settings.displayScalePercent}%"
+            textSize = 13f
+            setTextColor(AppUi.textSecondary)
+            gravity = Gravity.CENTER
+            minWidth = dp(48)
+        }
+        val size = SeekBar(this).apply {
+            max = 50
+            progress = settings.displayScalePercent - 50
+            AppUi.styleSlider(this)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (!fromUser) return
+                    settings.displayScalePercent = progress + 50
+                    value.text = "${progress + 50}%"
+                    video.setDisplayScale(progress + 50)
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        }
+        val fill = Button(this).apply {
+            text = if (settings.stretchToFill) "Fill ✓" else "Fill"
+            AppUi.styleButton(this, primary = settings.stretchToFill)
+            setOnClickListener {
+                settings.stretchToFill = !settings.stretchToFill
+                video.setStretchToFill(settings.stretchToFill)
+                text = if (settings.stretchToFill) "Fill ✓" else "Fill"
+                AppUi.styleButton(this, primary = settings.stretchToFill)
+            }
+        }
+        val done = Button(this).apply {
+            text = "Done"
+            AppUi.styleButton(this, primary = true)
+            setOnClickListener {
+                settings.layout = layoutModel
+                hud.setEditMode(false)
+                (liveLayoutTools?.parent as? FrameLayout)?.removeView(liveLayoutTools)
+                liveLayoutTools = null
+            }
+        }
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            AppUi.cardBackground(this)
+            addView(title)
+            addView(size, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(value)
+            addView(fill)
+            addView(done)
+        }
+        liveLayoutTools = panel
+        streamRoot.addView(panel, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP).apply {
+            leftMargin = dp(12); rightMargin = dp(12); topMargin = dp(18)
+        })
+    }
+
+    private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     private fun onKeyboardResult(result: KeyboardSender.Result) {
         val message = when (result) {
@@ -306,6 +414,11 @@ class StreamActivity : Activity() {
         if (hasFocus) hideSystemBars()
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (::settings.isInitialized && ::hud.isInitialized) hud.setTouchDragCameraEnabled(settings.touchDragCamera)
+    }
+
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if ((event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP) &&
             physicalGamepad.handleKey(event, event.action == KeyEvent.ACTION_DOWN)) return true
@@ -325,6 +438,7 @@ class StreamActivity : Activity() {
     override fun onDestroy() {
         keyboardDialog?.dismiss()
         sensitivityDialog?.dismiss()
+        if (::hud.isInitialized) hud.setStreamConnected(false)
         synchronized(this) {
             closing = true
             keyboard?.stop()

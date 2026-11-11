@@ -3,6 +3,7 @@ package com.remotegamestreamer.client
 import android.content.Context
 import com.remotegamestreamer.client.input.HudLayout
 import com.remotegamestreamer.client.net.Protocol
+import java.util.Base64
 
 /** Everything the Settings screen and layout editor save. */
 class AppSettings(context: Context) {
@@ -33,17 +34,22 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean("sound", true)
         set(v) = prefs.edit().putBoolean("sound", v).apply()
 
-    var opacityPercent: Int
-        get() = prefs.getInt("opacity", 50)
-        set(v) = prefs.edit().putInt("opacity", v).apply()
-
     var displayScalePercent: Int
         get() = prefs.getInt("displayScale", 100)
         set(v) = prefs.edit().putInt("displayScale", v.coerceIn(50, 100)).apply()
 
+    var stretchToFill: Boolean
+        get() = prefs.getBoolean("stretchToFill", false)
+        set(v) = prefs.edit().putBoolean("stretchToFill", v).apply()
+
     var stickLocked: Boolean
         get() = prefs.getBoolean("stickLocked", true)
         set(v) = prefs.edit().putBoolean("stickLocked", v).apply()
+
+    /** True uses touch dragging for the camera; false reserves it for a physical right stick. */
+    var touchDragCamera: Boolean
+        get() = prefs.getBoolean("touchDragCamera", true)
+        set(v) = prefs.edit().putBoolean("touchDragCamera", v).apply()
 
     var cameraSensitivityPercent: Int
         get() = prefs.getInt("cameraSensitivity", 100)
@@ -56,6 +62,23 @@ class AppSettings(context: Context) {
     var layout: HudLayout
         get() = HudLayout.parse(prefs.getString("layout", null))
         set(v) = prefs.edit().putString("layout", v.serialize()).apply()
+
+    fun savedHudPresetNames(): List<String> = prefs.all.keys
+        .filter { it.startsWith(HUD_PRESET_PREFIX) }
+        .mapNotNull { key -> runCatching { String(Base64.getUrlDecoder().decode(key.removePrefix(HUD_PRESET_PREFIX)), Charsets.UTF_8) }.getOrNull() }
+        .sortedBy(String::lowercase)
+
+    fun saveHudPreset(name: String, layout: HudLayout) {
+        val cleanName = name.trim().take(32)
+        if (cleanName.isEmpty()) return
+        val encodedName = Base64.getUrlEncoder().withoutPadding().encodeToString(cleanName.toByteArray(Charsets.UTF_8))
+        prefs.edit().putString(HUD_PRESET_PREFIX + encodedName, layout.serialize()).apply()
+    }
+
+    fun loadHudPreset(name: String): HudLayout? {
+        val encodedName = Base64.getUrlEncoder().withoutPadding().encodeToString(name.toByteArray(Charsets.UTF_8))
+        return prefs.getString(HUD_PRESET_PREFIX + encodedName, null)?.let(HudLayout::parse)
+    }
 
     fun streamRequest() = Protocol.StreamRequest(maxHeight, fps, bitrateMbps, hevc, sound)
 
@@ -71,6 +94,7 @@ class AppSettings(context: Context) {
 
     companion object {
         private const val HOST_KEY_PREFIX = "hostKey_"
+        private const val HUD_PRESET_PREFIX = "hudPreset_"
         const val MIN_CAMERA_SENSITIVITY = 25
         const val MAX_CAMERA_SENSITIVITY = 400
         val RESOLUTIONS = listOf(720, 900, 1080, 1440, 2160)

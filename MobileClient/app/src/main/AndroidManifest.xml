@@ -29,7 +29,6 @@
             android:name=".LayoutEditorActivity"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize"
             android:exported="false"
-            android:screenOrientation="sensorLandscape"
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen" />
 
         <activity
