@@ -62,6 +62,23 @@ jobs:
           Remove-Item update-key.pem
           if ($signed -ne 0) { throw "Signing failed" }
 
+      - name: Download pinned ViGEmBus installer
+        run: |
+          $driverDir = Join-Path $PWD '.tools/installers'
+          New-Item -ItemType Directory -Force -Path $driverDir | Out-Null
+          $driverPath = Join-Path $driverDir 'ViGEmBus_1.22.0_x64_x86_arm64.exe'
+          Invoke-WebRequest -Uri 'https://github.com/nefarius/ViGEmBus/releases/download/v1.22.0/ViGEmBus_1.22.0_x64_x86_arm64.exe' -OutFile $driverPath
+          $actualHash = (Get-FileHash $driverPath -Algorithm SHA256).Hash
+          if ($actualHash -ne '89220A7865076B342892F98865F3499FB7C4CFD673159E89D352C360FD014C6A') { throw "ViGEmBus installer checksum mismatch" }
+
+      - name: Build Windows installer
+        run: |
+          choco install innosetup --yes --no-progress
+          $compiler = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $compiler)) { throw "Inno Setup compiler not found at $compiler" }
+          & $compiler "/DAppVersion=$env:VERSION" 'Installer/OmniDeck.iss'
+          if ($LASTEXITCODE -ne 0) { throw "Windows installer build failed" }
+
       - name: Test and build Android app
         working-directory: MobileClient
         env:
@@ -80,4 +97,4 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:GITHUB_REF_NAME OmniDeck-windows.zip OmniDeck-windows.zip.sig OmniDeck.apk --title "OmniDeck $env:VERSION" --generate-notes
+        run: gh release create $env:GITHUB_REF_NAME OmniDeck-Setup.exe OmniDeck-windows.zip OmniDeck-windows.zip.sig OmniDeck.apk --title "OmniDeck $env:VERSION" --generate-notes

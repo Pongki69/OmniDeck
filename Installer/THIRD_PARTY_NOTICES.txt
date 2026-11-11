@@ -1,0 +1,17 @@
+OmniDeck third-party components
+===============================
+
+FFmpeg
+------
+OmniDeck bundles an FFmpeg Windows build from BtbN/FFmpeg-Builds. The selected build
+is GPL-licensed. FFmpeg source and licensing information are available at:
+https://github.com/BtbN/FFmpeg-Builds
+https://ffmpeg.org/legal.html
+
+ViGEmBus
+--------
+The optional virtual gamepad driver is ViGEmBus 1.22.0 by Nefarius Software
+Solutions e.U. The driver is licensed under BSD-3-Clause. The project is retired
+and no longer receives updates. Upstream project and license:
+https://github.com/nefarius/ViGEmBus
+https://github.com/nefarius/ViGEmBus/blob/master/LICENSE

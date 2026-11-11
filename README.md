@@ -6,22 +6,17 @@ never hooked, inspected or modified.
 
 ## First-time setup
 
-1. Install the ViGEmBus driver: run `.tools/installers/ViGEmBus_1.22.0_x64_x86_arm64.exe`.
-2. Allow the input port through the Windows firewall, once, from an administrator PowerShell:
-
-   ```powershell
-   New-NetFirewallRule -DisplayName "Remote Game Streamer" -Direction Inbound -Protocol UDP -LocalPort 9050 -Action Allow -Profile Private
-   ```
-
-3. Install `dist/OmniDeck.apk` on the phone.
+1. Download and run `OmniDeck-Setup.exe` from the [latest GitHub release](https://github.com/Pongki69/OmniDeck/releases/latest). It installs the self-contained Windows app and FFmpeg, and adds a private-network-only, local-subnet firewall rule for the streaming port. Windows asks for administrator permission for this rule.
+2. Keep the optional ViGEmBus driver selected in Setup if you want phone touch controls to appear as an Xbox controller on the PC. It is a third-party kernel driver, so its installer asks for administrator permission. The ViGEmBus project is retired; see its [end-of-life notice](https://docs.nefarius.at/projects/ViGEm/End-of-Life/). OmniDeck streaming can still run without this driver, but virtual controller input will not work.
+3. Install `OmniDeck.apk` on the phone.
 
 ## Running
 
-1. Open `dist/OmniDeck/OmniDeck.exe`. Keep `ffmpeg.exe` in the same folder.
+1. Open OmniDeck from the Start menu or desktop shortcut. The installer includes FFmpeg and the .NET runtime.
 2. Put the phone on the same network, open the app, and enter the PC address and PIN shown in the
    window. The PIN changes on each launch unless you pass `--pin`.
 
-Logs are shown in the window and saved in `%LOCALAPPDATA%\OmniDeck\logs`.
+Uninstalling OmniDeck removes its firewall rule but leaves ViGEmBus installed because other controller apps may use it. Logs are shown in the window and saved in `%LOCALAPPDATA%\OmniDeck\logs`.
 
 For 120 FPS, set the PC monitor to 120 Hz or higher in Windows display settings and choose 120 FPS
 in the app. The stream can't exceed the monitor's refresh rate.
